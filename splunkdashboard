@@ -1,0 +1,1155 @@
+<form version="1.1" theme="light">
+  <label>IDLocker Ops</label>
+  <description>Nike IdentityIQ ERROR monitoring — one main view, click to drill down. Index app-gold, sourcetype log4j:IIQ</description>
+  <init>
+    <set token="selected_category">*</set>
+    <set token="selected_template">*</set>
+    <set token="selected_family">*</set>
+    <set token="selected_logger">*</set>
+    <set token="selected_app">*</set>
+  </init>
+  <fieldset submitButton="false">
+    <input type="time" token="time_range" searchWhenChanged="true">
+      <label>Time range</label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <title>Total ERROR events</title>
+      <single>
+        <search>
+          <query>
+            <![CDATA[
+index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ ERROR NOT "rest.ui.jaxrs.AllExceptionMapper"
+| rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+| where isnotnull(logger) AND NOT match(logger, "rest.ui.jaxrs.AllExceptionMapper")
+| stats count
+          ]]>
+          </query>
+        </search>
+        <option name="underLabel">in selected range</option>
+        <option name="showSparkline">1</option>
+        <option name="showTrendIndicator">1</option>
+      </single>
+    </panel>
+    <panel>
+      <title>How to use</title>
+      <html>
+        <div style="padding:8px 12px;background:#f4f6f8;border-radius:4px;font-size:13px;line-height:1.5">
+          <b>How to use:</b> Click a <b>failure domain</b> bar below to open detail charts and the breakdown table.
+          The table defaults to the <b>highest-count error category</b>.
+          Click an <b>error category</b> bar to switch category. Click a <b>table row</b> for raw log lines.
+        </div>
+      </html>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>ERROR failures by domain — click a bar to drill down</title>
+      <chart>
+        <search>
+          <query>
+            <![CDATA[
+        index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ ERROR NOT "rest.ui.jaxrs.AllExceptionMapper"
+        | rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+        | where isnotnull(logger) AND log_level="ERROR" AND NOT match(logger, "rest.ui.jaxrs.AllExceptionMapper|CsrfService")
+        | where NOT match(message, "(?i)Inside SPCONF Mover Mappings Custom|-- Enter geo rule from nike|Setting retry status for the entitlement")
+        | rex field=_raw max_match=0 "(?<exception_class>[a-zA-Z0-9_.$]+(?:Exception|Error))"
+        | eval exception_class=mvindex(exception_class,-1)
+        | eval failure_domain=case(
+            match(logger,"sailpoint\.task\.Housekeeper"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.task\.IdentityRequestMaintenance"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.api\.TaskManager|sailpoint\.task\.|sailpoint\.api\.FullTextifier"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.api\.Identitizer|sailpoint\.task\.IdentityRefreshExecutor|sailpoint\.object\.LockInfo"), "IDENTITY_PROCESSING",
+            match(logger,"sailpoint\.api\.Aggregator"), "AGGREGATION",
+            match(logger,"sailpoint\.provisioning\.IIQEvaluator|sailpoint\.provisioning\.PlanCompiler|sailpoint\.provisioning\.PlanEvaluator|sailpoint\.api\.Provisioner"), "PROVISIONING",
+            match(logger,"nike\.rule\.ResourceObjectCustomization|ResourceObjectCustomization"), "RULE_SCRIPT",
+            match(logger,"sailpoint\.server\.BSFRuleRunner"), "RULE_SCRIPT",
+            match(logger,"sailpoint\.workflow|sailpoint\.api\.Workflower"), "WORKFLOW",
+            match(logger,"sailpoint\.api\.Certificationer|sailpoint\.api\.CertificationPhaser"), "CERTIFICATION",
+            match(logger,"openconnector\.|sailpoint\.connector\."), "CONNECTOR",
+            match(logger,"nike\.integration"), "NIKE_INTEGRATION",
+            match(message,"(?i)failed to lazily initialize|could not initialize proxy|already associated with the session|GenericJDBCException"), "IIQ_PERSISTENCE",
+            match(message,"(?i)Provisioning error [0-9]+ for"), "LIFECYCLE_EVENT",
+            match(logger,"^rule\.|^Nike\.|^com\.nike"), "RULE_SCRIPT",
+            true(), "OTHER")
+        | eval error_family=case(
+            match(message,"(?i)The application script threw an exception.*NullPointerException"), "RULE_NULL_POINTER",
+            match(message,"(?i)The application script threw an exception|BeanShell script error|BSFException"), "RULE_SCRIPT_FAILURE",
+            match(message,"(?i)failed to lazily initialize a collection.*Identity\.links"), "HIBERNATE_LAZY_INIT_LINKS",
+            match(message,"(?i)failed to lazily initialize a collection"), "HIBERNATE_LAZY_INIT",
+            match(message,"(?i)could not initialize proxy - no Session"), "HIBERNATE_NO_SESSION",
+            match(message,"(?i)Session/EntityManager is closed"), "HIBERNATE_SESSION_CLOSED",
+            match(message,"(?i)already associated with the session.*sailpoint\.object\.Link"), "HIBERNATE_DUPLICATE_LINK",
+            match(message,"(?i)already associated with the session"), "HIBERNATE_DUPLICATE_SESSION",
+            match(message,"(?i)Certification phase transitioning failed"), "CERT_PHASE_TRANSITION_FAILED",
+            match(message,"(?i)GenericJDBCException.*could not execute statement"), "HIBERNATE_JDBC_EXECUTE",
+            match(message,"(?i)err_workflow_events_failed|Workflow event processing failed"), "MAINT_WORKFLOW_EVENTS",
+            match(message,"(?i)err_cert_auto_close_failed|Automatic certification closing failed"), "CERT_AUTO_CLOSE_FAILED",
+            match(message,"(?i)err_lcm_scan_failed|error scanning Identity Requests"), "IRM_LCM_SCAN_FAILED",
+            match(message,"(?i)task_msg_error_identity_refresh_threshold_exceeded|Threshold has been exceeded"), "REFRESH_THRESHOLD_EXCEEDED",
+            match(message,"(?i)Maximum refresh exceptions"), "REFRESH_MAX_EXCEPTIONS",
+            match(message,"(?i)Decache and try again"), "REFRESH_DECACHE",
+            match(message,"(?i)Unable to release lock"), "TASK_LOCK_RELEASE",
+            match(message,"(?i)Unable to locate manager account"), "MANAGER_ACCOUNT_MISSING",
+            match(message,"(?i)Exception during aggregation"), "AGGREGATION_EXCEPTION",
+            match(message,"(?i)Canceling delete detection due to aggregation errors"), "AGGREGATION_DELETE_DETECT",
+            match(message,"(?i)Provisioning failure:"), "PROVISIONING_SUMMARY",
+            match(message,"(?i)Provisioning error [0-9]+ for"), "LIFECYCLE_PROVISIONING_ERROR",
+            match(message,"(?i)Joiner Failures|Leaver Failures|Rehire Failures"), "LIFECYCLE_BATCH_SUMMARY",
+            match(message,"(?i)Unable to update shared TaskResult|Unable to create new TaskResult|TaskResultExistsException"), "TASKRESULT_FAILURE",
+            match(message,"(?i)already running"), "TASK_ALREADY_RUNNING",
+            match(message,"(?i)Error in .* step:"), "WORKFLOW_STEP_FAILURE",
+            match(logger,"(?i)joiner\.|leaver\.|rehire\.|\.wf\.step"), "LIFECYCLE_WORKFLOW_STEP",
+            match(message,"(?i)An unexpected error occurred.*GeneralException"), "GENERAL_EXCEPTION",
+            match(message,"(?i)RequestPermanentException"), "REQUEST_PERMANENT",
+            match(message,"(?i)RequestTemporaryException"), "REQUEST_TEMPORARY",
+            match(message,"(?i)err_workflow_errors|Workflow completed with errors"), "WORKFLOW_COMPLETED_ERRORS",
+            match(message,"(?i)Improper AccountSelection"), "ACCOUNT_SELECTION_INVALID",
+            match(logger,"sailpoint\.api\.FullTextifier") AND match(message,"(?i)Undeclared field"), "FULLTEXT_INDEX_UNDECLARED_FIELD",
+            match(message,"(?i)Undeclared field: application\.extended1"), "UNDECLARED_FIELD_EXTENDED1",
+            match(message,"(?i)Cannot find TaskDefinition for TaskSchedule"), "TASK_DEFINITION_MISSING",
+            match(message,"(?i)Beeline Status TrackingJSONArray"), "BEELINE_JSON_ARRAY",
+            match(message,"(?i)ResourceObjectCustomization AD privileged rule.*StringIndexOutOfBoundsException"), "AD_PRIV_RULE_STRING_INDEX",
+            match(message,"(?i)Refresh lock expired for Identity"), "REFRESH_LOCK_EXPIRED",
+            match(message,"(?i)Aggregation lock expired for Identity"), "AGGREGATION_LOCK_EXPIRED",
+            match(message,"(?i)reached end of Refresh without lock"), "REFRESH_WITHOUT_LOCK",
+            match(message,"(?i)Incorrect integer value.*IfRetail"), "JDBC_IFRETAIL_TYPE_MISMATCH",
+            match(message,"(?i)CSRF validation failed"), "CSRF_VALIDATION",
+            match(message,"(?i)Could not parse request"), "SCIM_PARSE_REQUEST",
+            match(message,"(?i)No first name w"), "SCIM_MISSING_FIRSTNAME",
+            match(message,"(?i)Step call threw an exception"), "WORKFLOW_STEP_EXCEPTION",
+            match(message,"(?i)Incremental ResourceObject without matching Link"), "AGGREGATION_ORPHAN_RO",
+            match(message,"(?i)objectJson is null or empty"), "INTEGRATION_NULL_JSON",
+            match(message,"(?i)Set status retry: for all attributes"), "CONNECTOR_RETRY_ALL_ATTRS",
+            match(message,"(?i)validationErrorValidation error occurred|SOAP-ENV:Client\.validationError"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)Exception occurred while performing.*validationError|Change_Job_Request|Headcount_Option|Proposed_Position"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)scimType.:uniqueness|already in use|already exists in our database|LoginId must be unique|HTTP/1.1 409"), "SCIM_UNIQUENESS",
+            match(message,"(?i)Username already taken|Email has already been taken|That externalId or email address is already in use"), "SCIM_UNIQUENESS",
+            match(message,"(?i)Could not parse request"), "SCIM_PARSE_REQUEST",
+            match(message,"(?i)No first name was provided|Country field is either null"), "SCIM_VALIDATION",
+            match(message,"(?i)Exception occurred while performing"), "PROVISIONING_OPERATION_EXCEPTION",
+            match(message,"(?i)error in ResourceObjectCustomization AD privileged|ResourceObjectCustomization AD privileged"), "AD_PRIV_RULE_STRING_INDEX",
+            match(message,"(?i)Identity has AD Link but no CRP"), "DATA_CORRELATION_GAP",
+            match(message,"(?i)Unresolved field dependency"), "RULE_FIELD_DEPENDENCY",
+            match(message,"(?i)Connector could not find account"), "CONNECTOR_ACCOUNT_NOT_FOUND",
+            match(message,"(?i)Owner Workgroup not present"), "WORKGROUP_NOT_FOUND",
+            match(message,"(?i)validationErrorValidation error occurred"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)[0-9]+ Error\(s\) reported back from the IQService.*connecting to group"), "AD_GROUP_NOT_FOUND",
+            match(message,"(?i)[0-9]+ Error\(s\) reported back from the IQService.*Failed to update attributes"), "AD_IDENTITY_UPDATE_NOT_FOUND",
+            match(exception_class,"NullPointerException"), "NULL_POINTER",
+            match(exception_class,"ClassCastException"), "RULE_TYPE_MISMATCH",
+            match(exception_class,"IllegalAccessException"), "JAVA_MODULE_ACCESS",
+            match(exception_class,"JSONException"), "RULE_JSON_PARSE",
+            match(exception_class,"ConnectorException"), "CONNECTOR_EXCEPTION",
+            match(exception_class,"GeneralException"), "GENERAL_EXCEPTION",
+            true(), "OTHER")
+        | eval failure_domain=if(
+            match(message,"(?i)Unable to locate manager account|Decache and try again|Unable to release lock|reached end of Refresh without lock|Refresh lock expired|Aggregation lock expired|Maximum refresh exceptions|Threshold has been exceeded|Error encountered while trying to refresh partition|PHASE_PROCESS_EVENTS"),
+            "IDENTITY_PROCESSING", failure_domain)
+        | eval error_category=case(
+            match(error_family,"RULE_|BSF_|NULL_POINTER|JAVA_MODULE"), "RULE_SCRIPT",
+            match(error_family,"HIBERNATE_LAZY|HIBERNATE_NO_SESSION|HIBERNATE_SESSION_CLOSED"), "SESSION_CLOSED",
+            match(error_family,"HIBERNATE_DUPLICATE"), "SESSION_CONFLICT",
+            match(error_family,"HIBERNATE_JDBC|CERT_PHASE"), "DATABASE",
+            match(error_family,"CERT_"), "CERTIFICATION",
+            match(error_family,"REFRESH_LOCK|REFRESH_WITHOUT|AGGREGATION_LOCK|TASK_LOCK_RELEASE|REFRESH_DECACHE|REFRESH_MAX|REFRESH_THRESHOLD"), "SYSTEM_LOCK",
+            match(error_family,"MAINT_|IRM_|TASKRESULT|TASK_ALREADY|FULLTEXT_INDEX"), "SYSTEM_TASK",
+            match(error_family,"MANAGER_ACCOUNT"), "MISSING_MANAGER",
+            match(error_family,"AGGREGATION_ORPHAN|AGGREGATION_EXCEPTION|AGGREGATION_DELETE"), "DATA_VALIDATION",
+            match(error_family,"PROVISIONING_SUMMARY"), "PROVISIONING_FAILURE",
+            match(error_family,"LIFECYCLE"), "LIFECYCLE_PROVISIONING",
+            match(error_family,"WORKFLOW"), "WORKFLOW_FAILURE",
+            match(error_family,"CONNECTOR_EXCEPTION|GENERAL_EXCEPTION"), "IIQ_PLATFORM",
+            match(error_family,"ACCOUNT_SELECTION|UNDECLARED_FIELD|SCIM_MISSING|JDBC_IFRETAIL|AGGREGATION_ORPHAN|INTEGRATION_NULL"), "DATA_VALIDATION",
+            match(error_family,"SOAP_VALIDATION"), "INTEGRATION_VALIDATION",
+            match(error_family,"CONNECTOR_RETRY"), "RETRY",
+            match(error_family,"TASK_DEFINITION"), "CONFIGURATION",
+            match(error_family,"BEELINE_JSON|SCIM_PARSE"), "INTEGRATION",
+            match(error_family,"CSRF"), "AUTHENTICATION",
+            match(error_family,"AD_GROUP|AD_IDENTITY"), "OBJECT_NOT_FOUND",
+            true(), "OTHER")
+        | rex field=message "Provisioning failure: (?<identity_name>[^\s]+) on (?<target_application>.+)$"
+        | join type=left thread [
+            search index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ logger="sailpoint.api.Aggregator" ("Beginning account scan" OR "Beginning group scan" OR "Refreshing")
+            | rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+            | rex field=message "Beginning account scan on application: (?<agg_app>.+)$"
+            | rex field=message "Beginning group scan on application: (?<agg_app>.+)$"
+            | rex field=message "Refreshing [^ ]+ from (?<agg_app>.+)$"
+            | eval agg_app=trim(coalesce(agg_app, ""))
+            | where len(agg_app)>0
+            | stats latest(agg_app) as agg_app by thread
+        ]
+        | eval target_application=coalesce(nullif(target_application,""), agg_app, "Unknown")
+        | eval target_application=if(match(logger,"sailpoint\.api\.Identitizer|sailpoint\.task\.IdentityRefreshExecutor|sailpoint\.object\.LockInfo"), "Identity Refresh", target_application)
+        | eval target_application=if(match(logger,"sailpoint\.api\.FullTextifier"), "Full Text Index", target_application)
+        | eval target_application=if(match(logger,"sailpoint\.provisioning\.IIQEvaluator") AND match(error_family,"ACCOUNT_SELECTION|UNDECLARED_FIELD"), "IIQ Identity Cube", target_application)
+        | eval error_template=trim(message)
+        | rex field=error_template mode=sed "s/Incremental ResourceObject without matching Link: [0-9]+/Incremental ResourceObject without matching Link: {link_id}/g"
+        | rex field=error_template mode=sed "s/Provisioning failure: [^ ]+ on/Provisioning failure: {identity} on/g"
+        | rex field=error_template mode=sed "s/[^ ]*@[^ ]*/{email}/g"
+        | rex field=error_template mode=sed "s/[0-9][0-9][0-9][0-9]+/{id}/g"
+        | rex field=error_template mode=sed "s/Refresh lock expired for Identity: [^ ]+/Refresh lock expired for Identity: {identity}/g"
+        | rex field=error_template mode=sed "s/Aggregation lock expired for Identity: [^ ]+/Aggregation lock expired for Identity: {identity}/g"
+        | rex field=error_template mode=sed "s/reached end of Refresh without lock: [^ ]+/reached end of Refresh without lock: {identity}/g"
+        | eval error_template=case(
+            error_family="RULE_NULL_POINTER", "Application rule script failure: NullPointerException (BeanShell)",
+            error_family="RULE_SCRIPT_FAILURE", "Application rule script failure (BeanShell)",
+            error_family="HIBERNATE_LAZY_INIT_LINKS", "Hibernate: Identity.links lazy init failed (no Session)",
+            error_family="HIBERNATE_LAZY_INIT", "Hibernate: lazy collection init failed (no Session)",
+            error_family="HIBERNATE_NO_SESSION", "Hibernate: could not initialize proxy (no Session)",
+            error_family="HIBERNATE_DUPLICATE_LINK", "Hibernate: duplicate Link object in session",
+            error_family="CERT_PHASE_TRANSITION_FAILED", "Certification phase transition failed (database/persistence)",
+            error_family="MAINT_WORKFLOW_EVENTS", "Housekeeper: workflow event processing failed",
+            error_family="FULLTEXT_INDEX_UNDECLARED_FIELD", "Full Text Index: Undeclared field application.extended1",
+            error_family="REFRESH_DECACHE", "Identity Refresh: Decache and try again",
+            error_family="TASK_LOCK_RELEASE", "Unable to release lock",
+            error_family="REFRESH_WITHOUT_LOCK", "Identity reached end of Refresh without lock: {identity}",
+            error_family="REFRESH_LOCK_EXPIRED", "Refresh lock expired for Identity: {identity}",
+            error_family="AGGREGATION_LOCK_EXPIRED", "Aggregation lock expired for Identity: {identity}",
+            error_family="REFRESH_MAX_EXCEPTIONS", "Maximum refresh exceptions exceeded",
+            error_family="REFRESH_THRESHOLD_EXCEEDED", "Identity Refresh threshold exceeded",
+            error_family="MANAGER_ACCOUNT_MISSING", "Unable to locate manager account with identity: {email}",
+            error_family="ACCOUNT_SELECTION_INVALID", "Improper AccountSelection identity encountered",
+            error_family="SOAP_VALIDATION_WORKDAY", "Workday SOAP validation error",
+            error_family="AD_GROUP_NOT_FOUND", "IQService: AD group not found (NO_OBJECT)",
+            error_family="AD_IDENTITY_UPDATE_NOT_FOUND", "IQService: AD identity attribute update failed (NO_OBJECT)",
+            error_family="AGGREGATION_ORPHAN_RO", "Incremental ResourceObject without matching Link: {link_id}",
+            error_family="PROVISIONING_SUMMARY", "Provisioning failure: {identity} on {application}",
+            error_family="GENERAL_EXCEPTION", "IIQ GeneralException (inspect nested cause)",
+            true(), error_template)
+| stats count by failure_domain
+| sort - count
+          ]]>
+          </query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.axisTitleX.text">Failure Domain</option>
+        <option name="charting.axisTitleY.text">ERROR Count</option>
+        <option name="charting.axisTitleX.visibility">visible</option>
+        <option name="charting.axisTitleY.visibility">visible</option>
+        <option name="charting.axisY.includeZero">1</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">-45</option>
+        <option name="drilldown">all</option>
+        <drilldown>
+          <set token="selected_domain">$click.value$</set>
+          <unset token="prov_app_op_panel"></unset>
+          <set token="selected_category">*</set>
+          <set token="selected_template">*</set>
+          <set token="selected_family">*</set>
+          <set token="selected_logger">*</set>
+          <set token="selected_app">*</set>
+          <unset token="drill_row"></unset>
+        </drilldown>
+      </chart>
+    </panel>
+  </row>
+  <row depends="$selected_domain$">
+    <panel>
+      <title>$selected_domain$ — trend (7 days)</title>
+      <chart>
+        <search>
+          <query>
+            <![CDATA[
+        index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ ERROR NOT "rest.ui.jaxrs.AllExceptionMapper"
+        | rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+        | where isnotnull(logger) AND log_level="ERROR" AND NOT match(logger, "rest.ui.jaxrs.AllExceptionMapper|CsrfService")
+        | where NOT match(message, "(?i)Inside SPCONF Mover Mappings Custom|-- Enter geo rule from nike|Setting retry status for the entitlement")
+        | rex field=_raw max_match=0 "(?<exception_class>[a-zA-Z0-9_.$]+(?:Exception|Error))"
+        | eval exception_class=mvindex(exception_class,-1)
+        | eval failure_domain=case(
+            match(logger,"sailpoint\.task\.Housekeeper"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.task\.IdentityRequestMaintenance"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.api\.TaskManager|sailpoint\.task\.|sailpoint\.api\.FullTextifier"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.api\.Identitizer|sailpoint\.task\.IdentityRefreshExecutor|sailpoint\.object\.LockInfo"), "IDENTITY_PROCESSING",
+            match(logger,"sailpoint\.api\.Aggregator"), "AGGREGATION",
+            match(logger,"sailpoint\.provisioning\.IIQEvaluator|sailpoint\.provisioning\.PlanCompiler|sailpoint\.provisioning\.PlanEvaluator|sailpoint\.api\.Provisioner"), "PROVISIONING",
+            match(logger,"nike\.rule\.ResourceObjectCustomization|ResourceObjectCustomization"), "RULE_SCRIPT",
+            match(logger,"sailpoint\.server\.BSFRuleRunner"), "RULE_SCRIPT",
+            match(logger,"sailpoint\.workflow|sailpoint\.api\.Workflower"), "WORKFLOW",
+            match(logger,"sailpoint\.api\.Certificationer|sailpoint\.api\.CertificationPhaser"), "CERTIFICATION",
+            match(logger,"openconnector\.|sailpoint\.connector\."), "CONNECTOR",
+            match(logger,"nike\.integration"), "NIKE_INTEGRATION",
+            match(message,"(?i)failed to lazily initialize|could not initialize proxy|already associated with the session|GenericJDBCException"), "IIQ_PERSISTENCE",
+            match(message,"(?i)Provisioning error [0-9]+ for"), "LIFECYCLE_EVENT",
+            match(logger,"^rule\.|^Nike\.|^com\.nike"), "RULE_SCRIPT",
+            true(), "OTHER")
+        | eval error_family=case(
+            match(message,"(?i)The application script threw an exception.*NullPointerException"), "RULE_NULL_POINTER",
+            match(message,"(?i)The application script threw an exception|BeanShell script error|BSFException"), "RULE_SCRIPT_FAILURE",
+            match(message,"(?i)failed to lazily initialize a collection.*Identity\.links"), "HIBERNATE_LAZY_INIT_LINKS",
+            match(message,"(?i)failed to lazily initialize a collection"), "HIBERNATE_LAZY_INIT",
+            match(message,"(?i)could not initialize proxy - no Session"), "HIBERNATE_NO_SESSION",
+            match(message,"(?i)Session/EntityManager is closed"), "HIBERNATE_SESSION_CLOSED",
+            match(message,"(?i)already associated with the session.*sailpoint\.object\.Link"), "HIBERNATE_DUPLICATE_LINK",
+            match(message,"(?i)already associated with the session"), "HIBERNATE_DUPLICATE_SESSION",
+            match(message,"(?i)Certification phase transitioning failed"), "CERT_PHASE_TRANSITION_FAILED",
+            match(message,"(?i)GenericJDBCException.*could not execute statement"), "HIBERNATE_JDBC_EXECUTE",
+            match(message,"(?i)err_workflow_events_failed|Workflow event processing failed"), "MAINT_WORKFLOW_EVENTS",
+            match(message,"(?i)err_cert_auto_close_failed|Automatic certification closing failed"), "CERT_AUTO_CLOSE_FAILED",
+            match(message,"(?i)err_lcm_scan_failed|error scanning Identity Requests"), "IRM_LCM_SCAN_FAILED",
+            match(message,"(?i)task_msg_error_identity_refresh_threshold_exceeded|Threshold has been exceeded"), "REFRESH_THRESHOLD_EXCEEDED",
+            match(message,"(?i)Maximum refresh exceptions"), "REFRESH_MAX_EXCEPTIONS",
+            match(message,"(?i)Decache and try again"), "REFRESH_DECACHE",
+            match(message,"(?i)Unable to release lock"), "TASK_LOCK_RELEASE",
+            match(message,"(?i)Unable to locate manager account"), "MANAGER_ACCOUNT_MISSING",
+            match(message,"(?i)Exception during aggregation"), "AGGREGATION_EXCEPTION",
+            match(message,"(?i)Canceling delete detection due to aggregation errors"), "AGGREGATION_DELETE_DETECT",
+            match(message,"(?i)Provisioning failure:"), "PROVISIONING_SUMMARY",
+            match(message,"(?i)Provisioning error [0-9]+ for"), "LIFECYCLE_PROVISIONING_ERROR",
+            match(message,"(?i)Joiner Failures|Leaver Failures|Rehire Failures"), "LIFECYCLE_BATCH_SUMMARY",
+            match(message,"(?i)Unable to update shared TaskResult|Unable to create new TaskResult|TaskResultExistsException"), "TASKRESULT_FAILURE",
+            match(message,"(?i)already running"), "TASK_ALREADY_RUNNING",
+            match(message,"(?i)Error in .* step:"), "WORKFLOW_STEP_FAILURE",
+            match(logger,"(?i)joiner\.|leaver\.|rehire\.|\.wf\.step"), "LIFECYCLE_WORKFLOW_STEP",
+            match(message,"(?i)An unexpected error occurred.*GeneralException"), "GENERAL_EXCEPTION",
+            match(message,"(?i)RequestPermanentException"), "REQUEST_PERMANENT",
+            match(message,"(?i)RequestTemporaryException"), "REQUEST_TEMPORARY",
+            match(message,"(?i)err_workflow_errors|Workflow completed with errors"), "WORKFLOW_COMPLETED_ERRORS",
+            match(message,"(?i)Improper AccountSelection"), "ACCOUNT_SELECTION_INVALID",
+            match(logger,"sailpoint\.api\.FullTextifier") AND match(message,"(?i)Undeclared field"), "FULLTEXT_INDEX_UNDECLARED_FIELD",
+            match(message,"(?i)Undeclared field: application\.extended1"), "UNDECLARED_FIELD_EXTENDED1",
+            match(message,"(?i)Cannot find TaskDefinition for TaskSchedule"), "TASK_DEFINITION_MISSING",
+            match(message,"(?i)Beeline Status TrackingJSONArray"), "BEELINE_JSON_ARRAY",
+            match(message,"(?i)ResourceObjectCustomization AD privileged rule.*StringIndexOutOfBoundsException"), "AD_PRIV_RULE_STRING_INDEX",
+            match(message,"(?i)Refresh lock expired for Identity"), "REFRESH_LOCK_EXPIRED",
+            match(message,"(?i)Aggregation lock expired for Identity"), "AGGREGATION_LOCK_EXPIRED",
+            match(message,"(?i)reached end of Refresh without lock"), "REFRESH_WITHOUT_LOCK",
+            match(message,"(?i)Incorrect integer value.*IfRetail"), "JDBC_IFRETAIL_TYPE_MISMATCH",
+            match(message,"(?i)CSRF validation failed"), "CSRF_VALIDATION",
+            match(message,"(?i)Could not parse request"), "SCIM_PARSE_REQUEST",
+            match(message,"(?i)No first name w"), "SCIM_MISSING_FIRSTNAME",
+            match(message,"(?i)Step call threw an exception"), "WORKFLOW_STEP_EXCEPTION",
+            match(message,"(?i)Incremental ResourceObject without matching Link"), "AGGREGATION_ORPHAN_RO",
+            match(message,"(?i)objectJson is null or empty"), "INTEGRATION_NULL_JSON",
+            match(message,"(?i)Set status retry: for all attributes"), "CONNECTOR_RETRY_ALL_ATTRS",
+            match(message,"(?i)validationErrorValidation error occurred|SOAP-ENV:Client\.validationError"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)Exception occurred while performing.*validationError|Change_Job_Request|Headcount_Option|Proposed_Position"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)scimType.:uniqueness|already in use|already exists in our database|LoginId must be unique|HTTP/1.1 409"), "SCIM_UNIQUENESS",
+            match(message,"(?i)Username already taken|Email has already been taken|That externalId or email address is already in use"), "SCIM_UNIQUENESS",
+            match(message,"(?i)Could not parse request"), "SCIM_PARSE_REQUEST",
+            match(message,"(?i)No first name was provided|Country field is either null"), "SCIM_VALIDATION",
+            match(message,"(?i)Exception occurred while performing"), "PROVISIONING_OPERATION_EXCEPTION",
+            match(message,"(?i)error in ResourceObjectCustomization AD privileged|ResourceObjectCustomization AD privileged"), "AD_PRIV_RULE_STRING_INDEX",
+            match(message,"(?i)Identity has AD Link but no CRP"), "DATA_CORRELATION_GAP",
+            match(message,"(?i)Unresolved field dependency"), "RULE_FIELD_DEPENDENCY",
+            match(message,"(?i)Connector could not find account"), "CONNECTOR_ACCOUNT_NOT_FOUND",
+            match(message,"(?i)Owner Workgroup not present"), "WORKGROUP_NOT_FOUND",
+            match(message,"(?i)validationErrorValidation error occurred"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)[0-9]+ Error\(s\) reported back from the IQService.*connecting to group"), "AD_GROUP_NOT_FOUND",
+            match(message,"(?i)[0-9]+ Error\(s\) reported back from the IQService.*Failed to update attributes"), "AD_IDENTITY_UPDATE_NOT_FOUND",
+            match(exception_class,"NullPointerException"), "NULL_POINTER",
+            match(exception_class,"ClassCastException"), "RULE_TYPE_MISMATCH",
+            match(exception_class,"IllegalAccessException"), "JAVA_MODULE_ACCESS",
+            match(exception_class,"JSONException"), "RULE_JSON_PARSE",
+            match(exception_class,"ConnectorException"), "CONNECTOR_EXCEPTION",
+            match(exception_class,"GeneralException"), "GENERAL_EXCEPTION",
+            true(), "OTHER")
+        | eval failure_domain=if(
+            match(message,"(?i)Unable to locate manager account|Decache and try again|Unable to release lock|reached end of Refresh without lock|Refresh lock expired|Aggregation lock expired|Maximum refresh exceptions|Threshold has been exceeded|Error encountered while trying to refresh partition|PHASE_PROCESS_EVENTS"),
+            "IDENTITY_PROCESSING", failure_domain)
+        | eval error_category=case(
+            match(error_family,"RULE_|BSF_|NULL_POINTER|JAVA_MODULE"), "RULE_SCRIPT",
+            match(error_family,"HIBERNATE_LAZY|HIBERNATE_NO_SESSION|HIBERNATE_SESSION_CLOSED"), "SESSION_CLOSED",
+            match(error_family,"HIBERNATE_DUPLICATE"), "SESSION_CONFLICT",
+            match(error_family,"HIBERNATE_JDBC|CERT_PHASE"), "DATABASE",
+            match(error_family,"CERT_"), "CERTIFICATION",
+            match(error_family,"REFRESH_LOCK|REFRESH_WITHOUT|AGGREGATION_LOCK|TASK_LOCK_RELEASE|REFRESH_DECACHE|REFRESH_MAX|REFRESH_THRESHOLD"), "SYSTEM_LOCK",
+            match(error_family,"MAINT_|IRM_|TASKRESULT|TASK_ALREADY|FULLTEXT_INDEX"), "SYSTEM_TASK",
+            match(error_family,"MANAGER_ACCOUNT"), "MISSING_MANAGER",
+            match(error_family,"AGGREGATION_ORPHAN|AGGREGATION_EXCEPTION|AGGREGATION_DELETE"), "DATA_VALIDATION",
+            match(error_family,"PROVISIONING_SUMMARY"), "PROVISIONING_FAILURE",
+            match(error_family,"LIFECYCLE"), "LIFECYCLE_PROVISIONING",
+            match(error_family,"WORKFLOW"), "WORKFLOW_FAILURE",
+            match(error_family,"CONNECTOR_EXCEPTION|GENERAL_EXCEPTION"), "IIQ_PLATFORM",
+            match(error_family,"ACCOUNT_SELECTION|UNDECLARED_FIELD|SCIM_MISSING|JDBC_IFRETAIL|AGGREGATION_ORPHAN|INTEGRATION_NULL"), "DATA_VALIDATION",
+            match(error_family,"SOAP_VALIDATION"), "INTEGRATION_VALIDATION",
+            match(error_family,"CONNECTOR_RETRY"), "RETRY",
+            match(error_family,"TASK_DEFINITION"), "CONFIGURATION",
+            match(error_family,"BEELINE_JSON|SCIM_PARSE"), "INTEGRATION",
+            match(error_family,"CSRF"), "AUTHENTICATION",
+            match(error_family,"AD_GROUP|AD_IDENTITY"), "OBJECT_NOT_FOUND",
+            true(), "OTHER")
+        | rex field=message "Provisioning failure: (?<identity_name>[^\s]+) on (?<target_application>.+)$"
+        | join type=left thread [
+            search index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ logger="sailpoint.api.Aggregator" ("Beginning account scan" OR "Beginning group scan" OR "Refreshing")
+            | rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+            | rex field=message "Beginning account scan on application: (?<agg_app>.+)$"
+            | rex field=message "Beginning group scan on application: (?<agg_app>.+)$"
+            | rex field=message "Refreshing [^ ]+ from (?<agg_app>.+)$"
+            | eval agg_app=trim(coalesce(agg_app, ""))
+            | where len(agg_app)>0
+            | stats latest(agg_app) as agg_app by thread
+        ]
+        | eval target_application=coalesce(nullif(target_application,""), agg_app, "Unknown")
+        | eval target_application=if(match(logger,"sailpoint\.api\.Identitizer|sailpoint\.task\.IdentityRefreshExecutor|sailpoint\.object\.LockInfo"), "Identity Refresh", target_application)
+        | eval target_application=if(match(logger,"sailpoint\.api\.FullTextifier"), "Full Text Index", target_application)
+        | eval target_application=if(match(logger,"sailpoint\.provisioning\.IIQEvaluator") AND match(error_family,"ACCOUNT_SELECTION|UNDECLARED_FIELD"), "IIQ Identity Cube", target_application)
+        | eval error_template=trim(message)
+        | rex field=error_template mode=sed "s/Incremental ResourceObject without matching Link: [0-9]+/Incremental ResourceObject without matching Link: {link_id}/g"
+        | rex field=error_template mode=sed "s/Provisioning failure: [^ ]+ on/Provisioning failure: {identity} on/g"
+        | rex field=error_template mode=sed "s/[^ ]*@[^ ]*/{email}/g"
+        | rex field=error_template mode=sed "s/[0-9][0-9][0-9][0-9]+/{id}/g"
+        | rex field=error_template mode=sed "s/Refresh lock expired for Identity: [^ ]+/Refresh lock expired for Identity: {identity}/g"
+        | rex field=error_template mode=sed "s/Aggregation lock expired for Identity: [^ ]+/Aggregation lock expired for Identity: {identity}/g"
+        | rex field=error_template mode=sed "s/reached end of Refresh without lock: [^ ]+/reached end of Refresh without lock: {identity}/g"
+        | eval error_template=case(
+            error_family="RULE_NULL_POINTER", "Application rule script failure: NullPointerException (BeanShell)",
+            error_family="RULE_SCRIPT_FAILURE", "Application rule script failure (BeanShell)",
+            error_family="HIBERNATE_LAZY_INIT_LINKS", "Hibernate: Identity.links lazy init failed (no Session)",
+            error_family="HIBERNATE_LAZY_INIT", "Hibernate: lazy collection init failed (no Session)",
+            error_family="HIBERNATE_NO_SESSION", "Hibernate: could not initialize proxy (no Session)",
+            error_family="HIBERNATE_DUPLICATE_LINK", "Hibernate: duplicate Link object in session",
+            error_family="CERT_PHASE_TRANSITION_FAILED", "Certification phase transition failed (database/persistence)",
+            error_family="MAINT_WORKFLOW_EVENTS", "Housekeeper: workflow event processing failed",
+            error_family="FULLTEXT_INDEX_UNDECLARED_FIELD", "Full Text Index: Undeclared field application.extended1",
+            error_family="REFRESH_DECACHE", "Identity Refresh: Decache and try again",
+            error_family="TASK_LOCK_RELEASE", "Unable to release lock",
+            error_family="REFRESH_WITHOUT_LOCK", "Identity reached end of Refresh without lock: {identity}",
+            error_family="REFRESH_LOCK_EXPIRED", "Refresh lock expired for Identity: {identity}",
+            error_family="AGGREGATION_LOCK_EXPIRED", "Aggregation lock expired for Identity: {identity}",
+            error_family="REFRESH_MAX_EXCEPTIONS", "Maximum refresh exceptions exceeded",
+            error_family="REFRESH_THRESHOLD_EXCEEDED", "Identity Refresh threshold exceeded",
+            error_family="MANAGER_ACCOUNT_MISSING", "Unable to locate manager account with identity: {email}",
+            error_family="ACCOUNT_SELECTION_INVALID", "Improper AccountSelection identity encountered",
+            error_family="SOAP_VALIDATION_WORKDAY", "Workday SOAP validation error",
+            error_family="AD_GROUP_NOT_FOUND", "IQService: AD group not found (NO_OBJECT)",
+            error_family="AD_IDENTITY_UPDATE_NOT_FOUND", "IQService: AD identity attribute update failed (NO_OBJECT)",
+            error_family="AGGREGATION_ORPHAN_RO", "Incremental ResourceObject without matching Link: {link_id}",
+            error_family="PROVISIONING_SUMMARY", "Provisioning failure: {identity} on {application}",
+            error_family="GENERAL_EXCEPTION", "IIQ GeneralException (inspect nested cause)",
+            true(), error_template)
+| search failure_domain="$selected_domain$"
+| timechart span=15m count
+          ]]>
+          </query>
+          <earliest>-7d@h</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.axisTitleY.text">ERROR Count</option>
+        <option name="charting.axisTitleX.visibility">visible</option>
+        <option name="charting.axisTitleY.visibility">visible</option>
+        <option name="charting.axisY.includeZero">1</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>$selected_domain$ — error categories (click to filter table)</title>
+      <chart>
+        <search>
+          <query>
+            <![CDATA[
+        index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ ERROR NOT "rest.ui.jaxrs.AllExceptionMapper"
+        | rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+        | where isnotnull(logger) AND log_level="ERROR" AND NOT match(logger, "rest.ui.jaxrs.AllExceptionMapper|CsrfService")
+        | where NOT match(message, "(?i)Inside SPCONF Mover Mappings Custom|-- Enter geo rule from nike|Setting retry status for the entitlement")
+        | rex field=_raw max_match=0 "(?<exception_class>[a-zA-Z0-9_.$]+(?:Exception|Error))"
+        | eval exception_class=mvindex(exception_class,-1)
+        | eval failure_domain=case(
+            match(logger,"sailpoint\.task\.Housekeeper"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.task\.IdentityRequestMaintenance"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.api\.TaskManager|sailpoint\.task\.|sailpoint\.api\.FullTextifier"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.api\.Identitizer|sailpoint\.task\.IdentityRefreshExecutor|sailpoint\.object\.LockInfo"), "IDENTITY_PROCESSING",
+            match(logger,"sailpoint\.api\.Aggregator"), "AGGREGATION",
+            match(logger,"sailpoint\.provisioning\.IIQEvaluator|sailpoint\.provisioning\.PlanCompiler|sailpoint\.provisioning\.PlanEvaluator|sailpoint\.api\.Provisioner"), "PROVISIONING",
+            match(logger,"nike\.rule\.ResourceObjectCustomization|ResourceObjectCustomization"), "RULE_SCRIPT",
+            match(logger,"sailpoint\.server\.BSFRuleRunner"), "RULE_SCRIPT",
+            match(logger,"sailpoint\.workflow|sailpoint\.api\.Workflower"), "WORKFLOW",
+            match(logger,"sailpoint\.api\.Certificationer|sailpoint\.api\.CertificationPhaser"), "CERTIFICATION",
+            match(logger,"openconnector\.|sailpoint\.connector\."), "CONNECTOR",
+            match(logger,"nike\.integration"), "NIKE_INTEGRATION",
+            match(message,"(?i)failed to lazily initialize|could not initialize proxy|already associated with the session|GenericJDBCException"), "IIQ_PERSISTENCE",
+            match(message,"(?i)Provisioning error [0-9]+ for"), "LIFECYCLE_EVENT",
+            match(logger,"^rule\.|^Nike\.|^com\.nike"), "RULE_SCRIPT",
+            true(), "OTHER")
+        | eval error_family=case(
+            match(message,"(?i)The application script threw an exception.*NullPointerException"), "RULE_NULL_POINTER",
+            match(message,"(?i)The application script threw an exception|BeanShell script error|BSFException"), "RULE_SCRIPT_FAILURE",
+            match(message,"(?i)failed to lazily initialize a collection.*Identity\.links"), "HIBERNATE_LAZY_INIT_LINKS",
+            match(message,"(?i)failed to lazily initialize a collection"), "HIBERNATE_LAZY_INIT",
+            match(message,"(?i)could not initialize proxy - no Session"), "HIBERNATE_NO_SESSION",
+            match(message,"(?i)Session/EntityManager is closed"), "HIBERNATE_SESSION_CLOSED",
+            match(message,"(?i)already associated with the session.*sailpoint\.object\.Link"), "HIBERNATE_DUPLICATE_LINK",
+            match(message,"(?i)already associated with the session"), "HIBERNATE_DUPLICATE_SESSION",
+            match(message,"(?i)Certification phase transitioning failed"), "CERT_PHASE_TRANSITION_FAILED",
+            match(message,"(?i)GenericJDBCException.*could not execute statement"), "HIBERNATE_JDBC_EXECUTE",
+            match(message,"(?i)err_workflow_events_failed|Workflow event processing failed"), "MAINT_WORKFLOW_EVENTS",
+            match(message,"(?i)err_cert_auto_close_failed|Automatic certification closing failed"), "CERT_AUTO_CLOSE_FAILED",
+            match(message,"(?i)err_lcm_scan_failed|error scanning Identity Requests"), "IRM_LCM_SCAN_FAILED",
+            match(message,"(?i)task_msg_error_identity_refresh_threshold_exceeded|Threshold has been exceeded"), "REFRESH_THRESHOLD_EXCEEDED",
+            match(message,"(?i)Maximum refresh exceptions"), "REFRESH_MAX_EXCEPTIONS",
+            match(message,"(?i)Decache and try again"), "REFRESH_DECACHE",
+            match(message,"(?i)Unable to release lock"), "TASK_LOCK_RELEASE",
+            match(message,"(?i)Unable to locate manager account"), "MANAGER_ACCOUNT_MISSING",
+            match(message,"(?i)Exception during aggregation"), "AGGREGATION_EXCEPTION",
+            match(message,"(?i)Canceling delete detection due to aggregation errors"), "AGGREGATION_DELETE_DETECT",
+            match(message,"(?i)Provisioning failure:"), "PROVISIONING_SUMMARY",
+            match(message,"(?i)Provisioning error [0-9]+ for"), "LIFECYCLE_PROVISIONING_ERROR",
+            match(message,"(?i)Joiner Failures|Leaver Failures|Rehire Failures"), "LIFECYCLE_BATCH_SUMMARY",
+            match(message,"(?i)Unable to update shared TaskResult|Unable to create new TaskResult|TaskResultExistsException"), "TASKRESULT_FAILURE",
+            match(message,"(?i)already running"), "TASK_ALREADY_RUNNING",
+            match(message,"(?i)Error in .* step:"), "WORKFLOW_STEP_FAILURE",
+            match(logger,"(?i)joiner\.|leaver\.|rehire\.|\.wf\.step"), "LIFECYCLE_WORKFLOW_STEP",
+            match(message,"(?i)An unexpected error occurred.*GeneralException"), "GENERAL_EXCEPTION",
+            match(message,"(?i)RequestPermanentException"), "REQUEST_PERMANENT",
+            match(message,"(?i)RequestTemporaryException"), "REQUEST_TEMPORARY",
+            match(message,"(?i)err_workflow_errors|Workflow completed with errors"), "WORKFLOW_COMPLETED_ERRORS",
+            match(message,"(?i)Improper AccountSelection"), "ACCOUNT_SELECTION_INVALID",
+            match(logger,"sailpoint\.api\.FullTextifier") AND match(message,"(?i)Undeclared field"), "FULLTEXT_INDEX_UNDECLARED_FIELD",
+            match(message,"(?i)Undeclared field: application\.extended1"), "UNDECLARED_FIELD_EXTENDED1",
+            match(message,"(?i)Cannot find TaskDefinition for TaskSchedule"), "TASK_DEFINITION_MISSING",
+            match(message,"(?i)Beeline Status TrackingJSONArray"), "BEELINE_JSON_ARRAY",
+            match(message,"(?i)ResourceObjectCustomization AD privileged rule.*StringIndexOutOfBoundsException"), "AD_PRIV_RULE_STRING_INDEX",
+            match(message,"(?i)Refresh lock expired for Identity"), "REFRESH_LOCK_EXPIRED",
+            match(message,"(?i)Aggregation lock expired for Identity"), "AGGREGATION_LOCK_EXPIRED",
+            match(message,"(?i)reached end of Refresh without lock"), "REFRESH_WITHOUT_LOCK",
+            match(message,"(?i)Incorrect integer value.*IfRetail"), "JDBC_IFRETAIL_TYPE_MISMATCH",
+            match(message,"(?i)CSRF validation failed"), "CSRF_VALIDATION",
+            match(message,"(?i)Could not parse request"), "SCIM_PARSE_REQUEST",
+            match(message,"(?i)No first name w"), "SCIM_MISSING_FIRSTNAME",
+            match(message,"(?i)Step call threw an exception"), "WORKFLOW_STEP_EXCEPTION",
+            match(message,"(?i)Incremental ResourceObject without matching Link"), "AGGREGATION_ORPHAN_RO",
+            match(message,"(?i)objectJson is null or empty"), "INTEGRATION_NULL_JSON",
+            match(message,"(?i)Set status retry: for all attributes"), "CONNECTOR_RETRY_ALL_ATTRS",
+            match(message,"(?i)validationErrorValidation error occurred|SOAP-ENV:Client\.validationError"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)Exception occurred while performing.*validationError|Change_Job_Request|Headcount_Option|Proposed_Position"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)scimType.:uniqueness|already in use|already exists in our database|LoginId must be unique|HTTP/1.1 409"), "SCIM_UNIQUENESS",
+            match(message,"(?i)Username already taken|Email has already been taken|That externalId or email address is already in use"), "SCIM_UNIQUENESS",
+            match(message,"(?i)Could not parse request"), "SCIM_PARSE_REQUEST",
+            match(message,"(?i)No first name was provided|Country field is either null"), "SCIM_VALIDATION",
+            match(message,"(?i)Exception occurred while performing"), "PROVISIONING_OPERATION_EXCEPTION",
+            match(message,"(?i)error in ResourceObjectCustomization AD privileged|ResourceObjectCustomization AD privileged"), "AD_PRIV_RULE_STRING_INDEX",
+            match(message,"(?i)Identity has AD Link but no CRP"), "DATA_CORRELATION_GAP",
+            match(message,"(?i)Unresolved field dependency"), "RULE_FIELD_DEPENDENCY",
+            match(message,"(?i)Connector could not find account"), "CONNECTOR_ACCOUNT_NOT_FOUND",
+            match(message,"(?i)Owner Workgroup not present"), "WORKGROUP_NOT_FOUND",
+            match(message,"(?i)validationErrorValidation error occurred"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)[0-9]+ Error\(s\) reported back from the IQService.*connecting to group"), "AD_GROUP_NOT_FOUND",
+            match(message,"(?i)[0-9]+ Error\(s\) reported back from the IQService.*Failed to update attributes"), "AD_IDENTITY_UPDATE_NOT_FOUND",
+            match(exception_class,"NullPointerException"), "NULL_POINTER",
+            match(exception_class,"ClassCastException"), "RULE_TYPE_MISMATCH",
+            match(exception_class,"IllegalAccessException"), "JAVA_MODULE_ACCESS",
+            match(exception_class,"JSONException"), "RULE_JSON_PARSE",
+            match(exception_class,"ConnectorException"), "CONNECTOR_EXCEPTION",
+            match(exception_class,"GeneralException"), "GENERAL_EXCEPTION",
+            true(), "OTHER")
+        | eval failure_domain=if(
+            match(message,"(?i)Unable to locate manager account|Decache and try again|Unable to release lock|reached end of Refresh without lock|Refresh lock expired|Aggregation lock expired|Maximum refresh exceptions|Threshold has been exceeded|Error encountered while trying to refresh partition|PHASE_PROCESS_EVENTS"),
+            "IDENTITY_PROCESSING", failure_domain)
+        | eval error_category=case(
+            match(error_family,"RULE_|BSF_|NULL_POINTER|JAVA_MODULE"), "RULE_SCRIPT",
+            match(error_family,"HIBERNATE_LAZY|HIBERNATE_NO_SESSION|HIBERNATE_SESSION_CLOSED"), "SESSION_CLOSED",
+            match(error_family,"HIBERNATE_DUPLICATE"), "SESSION_CONFLICT",
+            match(error_family,"HIBERNATE_JDBC|CERT_PHASE"), "DATABASE",
+            match(error_family,"CERT_"), "CERTIFICATION",
+            match(error_family,"REFRESH_LOCK|REFRESH_WITHOUT|AGGREGATION_LOCK|TASK_LOCK_RELEASE|REFRESH_DECACHE|REFRESH_MAX|REFRESH_THRESHOLD"), "SYSTEM_LOCK",
+            match(error_family,"MAINT_|IRM_|TASKRESULT|TASK_ALREADY|FULLTEXT_INDEX"), "SYSTEM_TASK",
+            match(error_family,"MANAGER_ACCOUNT"), "MISSING_MANAGER",
+            match(error_family,"AGGREGATION_ORPHAN|AGGREGATION_EXCEPTION|AGGREGATION_DELETE"), "DATA_VALIDATION",
+            match(error_family,"PROVISIONING_SUMMARY"), "PROVISIONING_FAILURE",
+            match(error_family,"LIFECYCLE"), "LIFECYCLE_PROVISIONING",
+            match(error_family,"WORKFLOW"), "WORKFLOW_FAILURE",
+            match(error_family,"CONNECTOR_EXCEPTION|GENERAL_EXCEPTION"), "IIQ_PLATFORM",
+            match(error_family,"ACCOUNT_SELECTION|UNDECLARED_FIELD|SCIM_MISSING|JDBC_IFRETAIL|AGGREGATION_ORPHAN|INTEGRATION_NULL"), "DATA_VALIDATION",
+            match(error_family,"SOAP_VALIDATION"), "INTEGRATION_VALIDATION",
+            match(error_family,"CONNECTOR_RETRY"), "RETRY",
+            match(error_family,"TASK_DEFINITION"), "CONFIGURATION",
+            match(error_family,"BEELINE_JSON|SCIM_PARSE"), "INTEGRATION",
+            match(error_family,"CSRF"), "AUTHENTICATION",
+            match(error_family,"AD_GROUP|AD_IDENTITY"), "OBJECT_NOT_FOUND",
+            true(), "OTHER")
+        | rex field=message "Provisioning failure: (?<identity_name>[^\s]+) on (?<target_application>.+)$"
+        | join type=left thread [
+            search index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ logger="sailpoint.api.Aggregator" ("Beginning account scan" OR "Beginning group scan" OR "Refreshing")
+            | rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+            | rex field=message "Beginning account scan on application: (?<agg_app>.+)$"
+            | rex field=message "Beginning group scan on application: (?<agg_app>.+)$"
+            | rex field=message "Refreshing [^ ]+ from (?<agg_app>.+)$"
+            | eval agg_app=trim(coalesce(agg_app, ""))
+            | where len(agg_app)>0
+            | stats latest(agg_app) as agg_app by thread
+        ]
+        | eval target_application=coalesce(nullif(target_application,""), agg_app, "Unknown")
+        | eval target_application=if(match(logger,"sailpoint\.api\.Identitizer|sailpoint\.task\.IdentityRefreshExecutor|sailpoint\.object\.LockInfo"), "Identity Refresh", target_application)
+        | eval target_application=if(match(logger,"sailpoint\.api\.FullTextifier"), "Full Text Index", target_application)
+        | eval target_application=if(match(logger,"sailpoint\.provisioning\.IIQEvaluator") AND match(error_family,"ACCOUNT_SELECTION|UNDECLARED_FIELD"), "IIQ Identity Cube", target_application)
+        | eval error_template=trim(message)
+        | rex field=error_template mode=sed "s/Incremental ResourceObject without matching Link: [0-9]+/Incremental ResourceObject without matching Link: {link_id}/g"
+        | rex field=error_template mode=sed "s/Provisioning failure: [^ ]+ on/Provisioning failure: {identity} on/g"
+        | rex field=error_template mode=sed "s/[^ ]*@[^ ]*/{email}/g"
+        | rex field=error_template mode=sed "s/[0-9][0-9][0-9][0-9]+/{id}/g"
+        | rex field=error_template mode=sed "s/Refresh lock expired for Identity: [^ ]+/Refresh lock expired for Identity: {identity}/g"
+        | rex field=error_template mode=sed "s/Aggregation lock expired for Identity: [^ ]+/Aggregation lock expired for Identity: {identity}/g"
+        | rex field=error_template mode=sed "s/reached end of Refresh without lock: [^ ]+/reached end of Refresh without lock: {identity}/g"
+        | eval error_template=case(
+            error_family="RULE_NULL_POINTER", "Application rule script failure: NullPointerException (BeanShell)",
+            error_family="RULE_SCRIPT_FAILURE", "Application rule script failure (BeanShell)",
+            error_family="HIBERNATE_LAZY_INIT_LINKS", "Hibernate: Identity.links lazy init failed (no Session)",
+            error_family="HIBERNATE_LAZY_INIT", "Hibernate: lazy collection init failed (no Session)",
+            error_family="HIBERNATE_NO_SESSION", "Hibernate: could not initialize proxy (no Session)",
+            error_family="HIBERNATE_DUPLICATE_LINK", "Hibernate: duplicate Link object in session",
+            error_family="CERT_PHASE_TRANSITION_FAILED", "Certification phase transition failed (database/persistence)",
+            error_family="MAINT_WORKFLOW_EVENTS", "Housekeeper: workflow event processing failed",
+            error_family="FULLTEXT_INDEX_UNDECLARED_FIELD", "Full Text Index: Undeclared field application.extended1",
+            error_family="REFRESH_DECACHE", "Identity Refresh: Decache and try again",
+            error_family="TASK_LOCK_RELEASE", "Unable to release lock",
+            error_family="REFRESH_WITHOUT_LOCK", "Identity reached end of Refresh without lock: {identity}",
+            error_family="REFRESH_LOCK_EXPIRED", "Refresh lock expired for Identity: {identity}",
+            error_family="AGGREGATION_LOCK_EXPIRED", "Aggregation lock expired for Identity: {identity}",
+            error_family="REFRESH_MAX_EXCEPTIONS", "Maximum refresh exceptions exceeded",
+            error_family="REFRESH_THRESHOLD_EXCEEDED", "Identity Refresh threshold exceeded",
+            error_family="MANAGER_ACCOUNT_MISSING", "Unable to locate manager account with identity: {email}",
+            error_family="ACCOUNT_SELECTION_INVALID", "Improper AccountSelection identity encountered",
+            error_family="SOAP_VALIDATION_WORKDAY", "Workday SOAP validation error",
+            error_family="AD_GROUP_NOT_FOUND", "IQService: AD group not found (NO_OBJECT)",
+            error_family="AD_IDENTITY_UPDATE_NOT_FOUND", "IQService: AD identity attribute update failed (NO_OBJECT)",
+            error_family="AGGREGATION_ORPHAN_RO", "Incremental ResourceObject without matching Link: {link_id}",
+            error_family="PROVISIONING_SUMMARY", "Provisioning failure: {identity} on {application}",
+            error_family="GENERAL_EXCEPTION", "IIQ GeneralException (inspect nested cause)",
+            true(), error_template)
+| search failure_domain="$selected_domain$"
+| stats count by error_category
+| sort - count
+          ]]>
+          </query>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.axisTitleX.text">ERROR Count</option>
+        <option name="charting.axisTitleY.text">Error Category</option>
+        <option name="charting.axisTitleX.visibility">visible</option>
+        <option name="charting.axisTitleY.visibility">visible</option>
+        <option name="charting.axisY.includeZero">1</option>
+        <option name="drilldown">all</option>
+        <drilldown>
+          <set token="selected_category">$click.value$</set>
+          <unset token="prov_app_op_panel"></unset>
+          <eval token="prov_app_op_panel">if($click.value$="PROVISIONING_FAILURE","1",null())</eval>
+          <set token="selected_template">*</set>
+          <set token="selected_family">*</set>
+          <set token="selected_logger">*</set>
+          <unset token="drill_row"></unset>
+        </drilldown>
+      </chart>
+    </panel>
+  </row>
+  <row depends="$prov_app_op_panel$">
+    <panel>
+      <title>Provisioning failures — application × operation (PROVISIONING_FAILURE)</title>
+      <chart>
+        <search>
+          <query>
+            <![CDATA[
+index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ ERROR PlanEvaluator NOT "rest.ui.jaxrs.AllExceptionMapper"
+| rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+| where isnotnull(logger) AND NOT match(logger, "rest.ui.jaxrs.AllExceptionMapper")
+| rex field=message "Provisioning failure: (?<identity_name>[^\s]+) on (?<target_application>.+)$"
+| rex field=_raw "performing .(?<parsed_op>\w+). operation"
+| eval detail_op=case(isnotnull(parsed_op), parsed_op, match(message, "(?i)ENTRY_EXISTS|object already exists|uniqueness"), "Create", match(message, "(?i)update operation|Modify"), "Modify", true(), null())
+| sort 0 thread _time
+| streamstats current=t first(detail_op) as op_after window=5 by thread
+| streamstats current=f last(detail_op) as op_before window=5 by thread
+| where like(message, "Provisioning failure%")
+| eval target_application=trim(target_application)
+| eval account_operation=coalesce(op_after, op_before, "Unknown")
+| stats count by target_application account_operation
+| eventstats sum(count) as app_total by target_application
+| sort - app_total target_application account_operation
+| chart sum(count) over target_application by account_operation
+          ]]>
+          </query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.axisTitleX.text">Target Application</option>
+        <option name="charting.axisTitleY.text">Provisioning Failure Count</option>
+        <option name="charting.axisTitleX.visibility">visible</option>
+        <option name="charting.axisTitleY.visibility">visible</option>
+        <option name="charting.axisY.includeZero">1</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">-45</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Provisioning failures — detail table</title>
+      <table>
+        <search>
+          <query>
+            <![CDATA[
+index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ ERROR PlanEvaluator NOT "rest.ui.jaxrs.AllExceptionMapper"
+| rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+| where isnotnull(logger) AND NOT match(logger, "rest.ui.jaxrs.AllExceptionMapper")
+| rex field=message "Provisioning failure: (?<identity_name>[^\s]+) on (?<target_application>.+)$"
+| rex field=_raw "performing .(?<parsed_op>\w+). operation"
+| eval detail_op=case(isnotnull(parsed_op), parsed_op, match(message, "(?i)ENTRY_EXISTS|object already exists|uniqueness"), "Create", match(message, "(?i)update operation|Modify"), "Modify", true(), null())
+| sort 0 thread _time
+| streamstats current=t first(detail_op) as op_after window=5 by thread
+| streamstats current=f last(detail_op) as op_before window=5 by thread
+| where like(message, "Provisioning failure%")
+| eval target_application=trim(target_application)
+| eval account_operation=coalesce(op_after, op_before, "Unknown")
+| stats count dc(identity_name) as identities by target_application account_operation
+| eventstats sum(count) as app_total by target_application
+| sort - app_total - count
+| rename target_application AS "Application", account_operation AS "Operation", count AS "Failure Count", identities AS "Identities"
+          ]]>
+          </query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="count">20</option>
+      </table>
+    </panel>
+  </row>
+  <row depends="$selected_domain$">
+    <panel>
+      <title>$selected_domain$ — error breakdown (defaults to highest category)</title>
+      <table>
+        <search>
+          <query>
+            <![CDATA[
+        index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ ERROR NOT "rest.ui.jaxrs.AllExceptionMapper"
+        | rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+        | where isnotnull(logger) AND log_level="ERROR" AND NOT match(logger, "rest.ui.jaxrs.AllExceptionMapper|CsrfService")
+        | where NOT match(message, "(?i)Inside SPCONF Mover Mappings Custom|-- Enter geo rule from nike|Setting retry status for the entitlement")
+        | rex field=_raw max_match=0 "(?<exception_class>[a-zA-Z0-9_.$]+(?:Exception|Error))"
+        | eval exception_class=mvindex(exception_class,-1)
+        | sort 0 thread _time
+        | eval _exc=if(isnotnull(exception_class) AND len(exception_class)>0, exception_class, null())
+        | streamstats current=t first(_exc) as exc_forward window=20 by thread
+        | streamstats current=f last(_exc) as exc_backward window=20 by thread
+        | eval exception_class=coalesce(nullif(exception_class,""), exc_forward, exc_backward)
+        | eval exception_class=coalesce(exception_class,
+            if(match(message, "(?i)\bNullPointerException\b"), "NullPointerException", null()),
+            if(match(message, "(?i)\bClassCastException\b"), "ClassCastException", null()),
+            if(match(message, "(?i)\bConnectorException\b"), "ConnectorException", null()),
+            if(match(message, "(?i)\bGeneralException\b"), "GeneralException", null()),
+            if(match(message, "(?i)\bBSFException\b"), "BSFException", null()),
+            if(match(message, "(?i)\bIllegalAccessException\b"), "IllegalAccessException", null()),
+            if(match(message, "(?i)\bJSONException\b"), "JSONException", null()))
+        | fields - _exc exc_forward exc_backward
+        | eval failure_domain=case(
+            match(logger,"sailpoint\.task\.Housekeeper"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.task\.IdentityRequestMaintenance"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.api\.TaskManager|sailpoint\.task\.|sailpoint\.api\.FullTextifier"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.api\.Identitizer|sailpoint\.task\.IdentityRefreshExecutor|sailpoint\.object\.LockInfo"), "IDENTITY_PROCESSING",
+            match(logger,"sailpoint\.api\.Aggregator"), "AGGREGATION",
+            match(logger,"sailpoint\.provisioning\.IIQEvaluator|sailpoint\.provisioning\.PlanCompiler|sailpoint\.provisioning\.PlanEvaluator|sailpoint\.api\.Provisioner"), "PROVISIONING",
+            match(logger,"nike\.rule\.ResourceObjectCustomization|ResourceObjectCustomization"), "RULE_SCRIPT",
+            match(logger,"sailpoint\.server\.BSFRuleRunner"), "RULE_SCRIPT",
+            match(logger,"sailpoint\.workflow|sailpoint\.api\.Workflower"), "WORKFLOW",
+            match(logger,"sailpoint\.api\.Certificationer|sailpoint\.api\.CertificationPhaser"), "CERTIFICATION",
+            match(logger,"openconnector\.|sailpoint\.connector\."), "CONNECTOR",
+            match(logger,"nike\.integration"), "NIKE_INTEGRATION",
+            match(message,"(?i)failed to lazily initialize|could not initialize proxy|already associated with the session|GenericJDBCException"), "IIQ_PERSISTENCE",
+            match(message,"(?i)Provisioning error [0-9]+ for"), "LIFECYCLE_EVENT",
+            match(logger,"^rule\.|^Nike\.|^com\.nike"), "RULE_SCRIPT",
+            true(), "OTHER")
+        | eval error_family=case(
+            match(message,"(?i)The application script threw an exception.*NullPointerException"), "RULE_NULL_POINTER",
+            match(message,"(?i)The application script threw an exception|BeanShell script error|BSFException"), "RULE_SCRIPT_FAILURE",
+            match(message,"(?i)failed to lazily initialize a collection.*Identity\.links"), "HIBERNATE_LAZY_INIT_LINKS",
+            match(message,"(?i)failed to lazily initialize a collection"), "HIBERNATE_LAZY_INIT",
+            match(message,"(?i)could not initialize proxy - no Session"), "HIBERNATE_NO_SESSION",
+            match(message,"(?i)Session/EntityManager is closed"), "HIBERNATE_SESSION_CLOSED",
+            match(message,"(?i)already associated with the session.*sailpoint\.object\.Link"), "HIBERNATE_DUPLICATE_LINK",
+            match(message,"(?i)already associated with the session"), "HIBERNATE_DUPLICATE_SESSION",
+            match(message,"(?i)Certification phase transitioning failed"), "CERT_PHASE_TRANSITION_FAILED",
+            match(message,"(?i)GenericJDBCException.*could not execute statement"), "HIBERNATE_JDBC_EXECUTE",
+            match(message,"(?i)err_workflow_events_failed|Workflow event processing failed"), "MAINT_WORKFLOW_EVENTS",
+            match(message,"(?i)err_cert_auto_close_failed|Automatic certification closing failed"), "CERT_AUTO_CLOSE_FAILED",
+            match(message,"(?i)err_lcm_scan_failed|error scanning Identity Requests"), "IRM_LCM_SCAN_FAILED",
+            match(message,"(?i)task_msg_error_identity_refresh_threshold_exceeded|Threshold has been exceeded"), "REFRESH_THRESHOLD_EXCEEDED",
+            match(message,"(?i)Maximum refresh exceptions"), "REFRESH_MAX_EXCEPTIONS",
+            match(message,"(?i)Decache and try again"), "REFRESH_DECACHE",
+            match(message,"(?i)Unable to release lock"), "TASK_LOCK_RELEASE",
+            match(message,"(?i)Unable to locate manager account"), "MANAGER_ACCOUNT_MISSING",
+            match(message,"(?i)Exception during aggregation"), "AGGREGATION_EXCEPTION",
+            match(message,"(?i)Canceling delete detection due to aggregation errors"), "AGGREGATION_DELETE_DETECT",
+            match(message,"(?i)Provisioning failure:"), "PROVISIONING_SUMMARY",
+            match(message,"(?i)Provisioning error [0-9]+ for"), "LIFECYCLE_PROVISIONING_ERROR",
+            match(message,"(?i)Joiner Failures|Leaver Failures|Rehire Failures"), "LIFECYCLE_BATCH_SUMMARY",
+            match(message,"(?i)Unable to update shared TaskResult|Unable to create new TaskResult|TaskResultExistsException"), "TASKRESULT_FAILURE",
+            match(message,"(?i)already running"), "TASK_ALREADY_RUNNING",
+            match(message,"(?i)Error in .* step:"), "WORKFLOW_STEP_FAILURE",
+            match(logger,"(?i)joiner\.|leaver\.|rehire\.|\.wf\.step"), "LIFECYCLE_WORKFLOW_STEP",
+            match(message,"(?i)An unexpected error occurred.*GeneralException"), "GENERAL_EXCEPTION",
+            match(message,"(?i)RequestPermanentException"), "REQUEST_PERMANENT",
+            match(message,"(?i)RequestTemporaryException"), "REQUEST_TEMPORARY",
+            match(message,"(?i)err_workflow_errors|Workflow completed with errors"), "WORKFLOW_COMPLETED_ERRORS",
+            match(message,"(?i)Improper AccountSelection"), "ACCOUNT_SELECTION_INVALID",
+            match(logger,"sailpoint\.api\.FullTextifier") AND match(message,"(?i)Undeclared field"), "FULLTEXT_INDEX_UNDECLARED_FIELD",
+            match(message,"(?i)Undeclared field: application\.extended1"), "UNDECLARED_FIELD_EXTENDED1",
+            match(message,"(?i)Cannot find TaskDefinition for TaskSchedule"), "TASK_DEFINITION_MISSING",
+            match(message,"(?i)Beeline Status TrackingJSONArray"), "BEELINE_JSON_ARRAY",
+            match(message,"(?i)ResourceObjectCustomization AD privileged rule.*StringIndexOutOfBoundsException"), "AD_PRIV_RULE_STRING_INDEX",
+            match(message,"(?i)Refresh lock expired for Identity"), "REFRESH_LOCK_EXPIRED",
+            match(message,"(?i)Aggregation lock expired for Identity"), "AGGREGATION_LOCK_EXPIRED",
+            match(message,"(?i)reached end of Refresh without lock"), "REFRESH_WITHOUT_LOCK",
+            match(message,"(?i)Incorrect integer value.*IfRetail"), "JDBC_IFRETAIL_TYPE_MISMATCH",
+            match(message,"(?i)CSRF validation failed"), "CSRF_VALIDATION",
+            match(message,"(?i)Could not parse request"), "SCIM_PARSE_REQUEST",
+            match(message,"(?i)No first name w"), "SCIM_MISSING_FIRSTNAME",
+            match(message,"(?i)Step call threw an exception"), "WORKFLOW_STEP_EXCEPTION",
+            match(message,"(?i)Incremental ResourceObject without matching Link"), "AGGREGATION_ORPHAN_RO",
+            match(message,"(?i)objectJson is null or empty"), "INTEGRATION_NULL_JSON",
+            match(message,"(?i)Set status retry: for all attributes"), "CONNECTOR_RETRY_ALL_ATTRS",
+            match(message,"(?i)validationErrorValidation error occurred|SOAP-ENV:Client\.validationError"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)Exception occurred while performing.*validationError|Change_Job_Request|Headcount_Option|Proposed_Position"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)scimType.:uniqueness|already in use|already exists in our database|LoginId must be unique|HTTP/1.1 409"), "SCIM_UNIQUENESS",
+            match(message,"(?i)Username already taken|Email has already been taken|That externalId or email address is already in use"), "SCIM_UNIQUENESS",
+            match(message,"(?i)Could not parse request"), "SCIM_PARSE_REQUEST",
+            match(message,"(?i)No first name was provided|Country field is either null"), "SCIM_VALIDATION",
+            match(message,"(?i)Exception occurred while performing"), "PROVISIONING_OPERATION_EXCEPTION",
+            match(message,"(?i)error in ResourceObjectCustomization AD privileged|ResourceObjectCustomization AD privileged"), "AD_PRIV_RULE_STRING_INDEX",
+            match(message,"(?i)Identity has AD Link but no CRP"), "DATA_CORRELATION_GAP",
+            match(message,"(?i)Unresolved field dependency"), "RULE_FIELD_DEPENDENCY",
+            match(message,"(?i)Connector could not find account"), "CONNECTOR_ACCOUNT_NOT_FOUND",
+            match(message,"(?i)Owner Workgroup not present"), "WORKGROUP_NOT_FOUND",
+            match(message,"(?i)validationErrorValidation error occurred"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)[0-9]+ Error\(s\) reported back from the IQService.*connecting to group"), "AD_GROUP_NOT_FOUND",
+            match(message,"(?i)[0-9]+ Error\(s\) reported back from the IQService.*Failed to update attributes"), "AD_IDENTITY_UPDATE_NOT_FOUND",
+            match(exception_class,"NullPointerException"), "NULL_POINTER",
+            match(exception_class,"ClassCastException"), "RULE_TYPE_MISMATCH",
+            match(exception_class,"IllegalAccessException"), "JAVA_MODULE_ACCESS",
+            match(exception_class,"JSONException"), "RULE_JSON_PARSE",
+            match(exception_class,"ConnectorException"), "CONNECTOR_EXCEPTION",
+            match(exception_class,"GeneralException"), "GENERAL_EXCEPTION",
+            true(), "OTHER")
+        | eval failure_domain=if(
+            match(message,"(?i)Unable to locate manager account|Decache and try again|Unable to release lock|reached end of Refresh without lock|Refresh lock expired|Aggregation lock expired|Maximum refresh exceptions|Threshold has been exceeded|Error encountered while trying to refresh partition|PHASE_PROCESS_EVENTS"),
+            "IDENTITY_PROCESSING", failure_domain)
+        | eval error_category=case(
+            match(error_family,"RULE_|BSF_|NULL_POINTER|JAVA_MODULE"), "RULE_SCRIPT",
+            match(error_family,"HIBERNATE_LAZY|HIBERNATE_NO_SESSION|HIBERNATE_SESSION_CLOSED"), "SESSION_CLOSED",
+            match(error_family,"HIBERNATE_DUPLICATE"), "SESSION_CONFLICT",
+            match(error_family,"HIBERNATE_JDBC|CERT_PHASE"), "DATABASE",
+            match(error_family,"CERT_"), "CERTIFICATION",
+            match(error_family,"REFRESH_LOCK|REFRESH_WITHOUT|AGGREGATION_LOCK|TASK_LOCK_RELEASE|REFRESH_DECACHE|REFRESH_MAX|REFRESH_THRESHOLD"), "SYSTEM_LOCK",
+            match(error_family,"MAINT_|IRM_|TASKRESULT|TASK_ALREADY|FULLTEXT_INDEX"), "SYSTEM_TASK",
+            match(error_family,"MANAGER_ACCOUNT"), "MISSING_MANAGER",
+            match(error_family,"AGGREGATION_ORPHAN|AGGREGATION_EXCEPTION|AGGREGATION_DELETE"), "DATA_VALIDATION",
+            match(error_family,"PROVISIONING_SUMMARY"), "PROVISIONING_FAILURE",
+            match(error_family,"LIFECYCLE"), "LIFECYCLE_PROVISIONING",
+            match(error_family,"WORKFLOW"), "WORKFLOW_FAILURE",
+            match(error_family,"CONNECTOR_EXCEPTION|GENERAL_EXCEPTION"), "IIQ_PLATFORM",
+            match(error_family,"ACCOUNT_SELECTION|UNDECLARED_FIELD|SCIM_MISSING|JDBC_IFRETAIL|AGGREGATION_ORPHAN|INTEGRATION_NULL"), "DATA_VALIDATION",
+            match(error_family,"SOAP_VALIDATION"), "INTEGRATION_VALIDATION",
+            match(error_family,"CONNECTOR_RETRY"), "RETRY",
+            match(error_family,"TASK_DEFINITION"), "CONFIGURATION",
+            match(error_family,"BEELINE_JSON|SCIM_PARSE"), "INTEGRATION",
+            match(error_family,"CSRF"), "AUTHENTICATION",
+            match(error_family,"AD_GROUP|AD_IDENTITY"), "OBJECT_NOT_FOUND",
+            true(), "OTHER")
+        | rex field=message "Provisioning failure: (?<identity_name>[^\s]+) on (?<target_application>.+)$"
+        | join type=left thread [
+            search index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ logger="sailpoint.api.Aggregator" ("Beginning account scan" OR "Beginning group scan" OR "Refreshing")
+            | rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+            | rex field=message "Beginning account scan on application: (?<agg_app>.+)$"
+            | rex field=message "Beginning group scan on application: (?<agg_app>.+)$"
+            | rex field=message "Refreshing [^ ]+ from (?<agg_app>.+)$"
+            | eval agg_app=trim(coalesce(agg_app, ""))
+            | where len(agg_app)>0
+            | stats latest(agg_app) as agg_app by thread
+        ]
+        | eval target_application=coalesce(nullif(target_application,""), agg_app, "Unknown")
+        | eval target_application=if(match(logger,"sailpoint\.api\.Identitizer|sailpoint\.task\.IdentityRefreshExecutor|sailpoint\.object\.LockInfo"), "Identity Refresh", target_application)
+        | eval target_application=if(match(logger,"sailpoint\.api\.FullTextifier"), "Full Text Index", target_application)
+        | eval target_application=if(match(logger,"sailpoint\.provisioning\.IIQEvaluator") AND match(error_family,"ACCOUNT_SELECTION|UNDECLARED_FIELD"), "IIQ Identity Cube", target_application)
+        | eval error_template=trim(message)
+        | rex field=error_template mode=sed "s/Incremental ResourceObject without matching Link: [0-9]+/Incremental ResourceObject without matching Link: {link_id}/g"
+        | rex field=error_template mode=sed "s/Provisioning failure: [^ ]+ on/Provisioning failure: {identity} on/g"
+        | rex field=error_template mode=sed "s/[^ ]*@[^ ]*/{email}/g"
+        | rex field=error_template mode=sed "s/[0-9][0-9][0-9][0-9]+/{id}/g"
+        | rex field=error_template mode=sed "s/Refresh lock expired for Identity: [^ ]+/Refresh lock expired for Identity: {identity}/g"
+        | rex field=error_template mode=sed "s/Aggregation lock expired for Identity: [^ ]+/Aggregation lock expired for Identity: {identity}/g"
+        | rex field=error_template mode=sed "s/reached end of Refresh without lock: [^ ]+/reached end of Refresh without lock: {identity}/g"
+        | eval error_template=case(
+            error_family="RULE_NULL_POINTER", "Application rule script failure: NullPointerException (BeanShell)",
+            error_family="RULE_SCRIPT_FAILURE", "Application rule script failure (BeanShell)",
+            error_family="HIBERNATE_LAZY_INIT_LINKS", "Hibernate: Identity.links lazy init failed (no Session)",
+            error_family="HIBERNATE_LAZY_INIT", "Hibernate: lazy collection init failed (no Session)",
+            error_family="HIBERNATE_NO_SESSION", "Hibernate: could not initialize proxy (no Session)",
+            error_family="HIBERNATE_DUPLICATE_LINK", "Hibernate: duplicate Link object in session",
+            error_family="CERT_PHASE_TRANSITION_FAILED", "Certification phase transition failed (database/persistence)",
+            error_family="MAINT_WORKFLOW_EVENTS", "Housekeeper: workflow event processing failed",
+            error_family="FULLTEXT_INDEX_UNDECLARED_FIELD", "Full Text Index: Undeclared field application.extended1",
+            error_family="REFRESH_DECACHE", "Identity Refresh: Decache and try again",
+            error_family="TASK_LOCK_RELEASE", "Unable to release lock",
+            error_family="REFRESH_WITHOUT_LOCK", "Identity reached end of Refresh without lock: {identity}",
+            error_family="REFRESH_LOCK_EXPIRED", "Refresh lock expired for Identity: {identity}",
+            error_family="AGGREGATION_LOCK_EXPIRED", "Aggregation lock expired for Identity: {identity}",
+            error_family="REFRESH_MAX_EXCEPTIONS", "Maximum refresh exceptions exceeded",
+            error_family="REFRESH_THRESHOLD_EXCEEDED", "Identity Refresh threshold exceeded",
+            error_family="MANAGER_ACCOUNT_MISSING", "Unable to locate manager account with identity: {email}",
+            error_family="ACCOUNT_SELECTION_INVALID", "Improper AccountSelection identity encountered",
+            error_family="SOAP_VALIDATION_WORKDAY", "Workday SOAP validation error",
+            error_family="AD_GROUP_NOT_FOUND", "IQService: AD group not found (NO_OBJECT)",
+            error_family="AD_IDENTITY_UPDATE_NOT_FOUND", "IQService: AD identity attribute update failed (NO_OBJECT)",
+            error_family="AGGREGATION_ORPHAN_RO", "Incremental ResourceObject without matching Link: {link_id}",
+            error_family="PROVISIONING_SUMMARY", "Provisioning failure: {identity} on {application}",
+            error_family="GENERAL_EXCEPTION", "IIQ GeneralException (inspect nested cause)",
+            true(), error_template)
+| eval target_application=trim(coalesce(target_application, ""))
+| search failure_domain="$selected_domain$"
+| eval _tok_cat=if("$selected_category$"="*", "", "$selected_category$")
+| eval _use_explicit_category=if(len(_tok_cat)>0, 1, 0)
+| eventstats sum(1) as _cat_n by error_category
+| eventstats max(_cat_n) as _top_cat_n
+| where if(_use_explicit_category=1, error_category=_tok_cat, _cat_n=_top_cat_n)
+| fields - _tok_cat _use_explicit_category _cat_n _top_cat_n
+| stats count dc(eval(if(isnotnull(exception_class) AND len(exception_class)>0, exception_class, null()))) as exception_types by target_application error_category error_family error_template logger
+| sort - count
+          ]]>
+          </query>
+        </search>
+        <fields>target_application, error_category, error_family, error_template, logger, count, exception_types</fields>
+        <option name="drilldown">row</option>
+        <option name="wrap">true</option>
+        <option name="count">25</option>
+        <drilldown>
+          <set token="selected_app">$row.target_application$</set>
+          <set token="selected_category">$row.error_category$</set>
+          <set token="selected_family">$row.error_family$</set>
+          <set token="selected_template">$row.error_template$</set>
+          <set token="selected_logger">$row.logger$</set>
+          <set token="drill_row">show</set>
+          <unset token="prov_app_op_panel"></unset>
+          <eval token="prov_app_op_panel">if($row.error_category$="PROVISIONING_FAILURE","1",null())</eval>
+        </drilldown>
+        <format field="target_application" type="string">
+          <option name="label">Application</option>
+        </format>
+        <format field="error_category" type="string">
+          <option name="label">Error Category</option>
+        </format>
+        <format field="error_family" type="string">
+          <option name="label">Error Family</option>
+        </format>
+        <format field="error_template" type="string">
+          <option name="label">Error Template</option>
+        </format>
+        <format field="logger" type="string">
+          <option name="label">Logger</option>
+        </format>
+        <format field="count" type="number">
+          <option name="label">ERROR Count</option>
+        </format>
+        <format field="exception_types" type="number">
+          <option name="label">Exception Types</option>
+        </format>
+      </table>
+    </panel>
+  </row>
+  <row depends="$drill_row$">
+    <panel>
+      <title>Raw events — $selected_template$ ($selected_app$)</title>
+      <table>
+        <search>
+          <query>
+            <![CDATA[
+        index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ ERROR NOT "rest.ui.jaxrs.AllExceptionMapper"
+        | rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+        | where isnotnull(logger) AND log_level="ERROR" AND NOT match(logger, "rest.ui.jaxrs.AllExceptionMapper|CsrfService")
+        | where NOT match(message, "(?i)Inside SPCONF Mover Mappings Custom|-- Enter geo rule from nike|Setting retry status for the entitlement")
+        | rex field=_raw max_match=0 "(?<exception_class>[a-zA-Z0-9_.$]+(?:Exception|Error))"
+        | eval exception_class=mvindex(exception_class,-1)
+        | sort 0 thread _time
+        | eval _exc=if(isnotnull(exception_class) AND len(exception_class)>0, exception_class, null())
+        | streamstats current=t first(_exc) as exc_forward window=20 by thread
+        | streamstats current=f last(_exc) as exc_backward window=20 by thread
+        | eval exception_class=coalesce(nullif(exception_class,""), exc_forward, exc_backward)
+        | eval exception_class=coalesce(exception_class,
+            if(match(message, "(?i)\bNullPointerException\b"), "NullPointerException", null()),
+            if(match(message, "(?i)\bClassCastException\b"), "ClassCastException", null()),
+            if(match(message, "(?i)\bConnectorException\b"), "ConnectorException", null()),
+            if(match(message, "(?i)\bGeneralException\b"), "GeneralException", null()),
+            if(match(message, "(?i)\bBSFException\b"), "BSFException", null()),
+            if(match(message, "(?i)\bIllegalAccessException\b"), "IllegalAccessException", null()),
+            if(match(message, "(?i)\bJSONException\b"), "JSONException", null()))
+        | fields - _exc exc_forward exc_backward
+        | eval failure_domain=case(
+            match(logger,"sailpoint\.task\.Housekeeper"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.task\.IdentityRequestMaintenance"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.api\.TaskManager|sailpoint\.task\.|sailpoint\.api\.FullTextifier"), "SYSTEM_TASK",
+            match(logger,"sailpoint\.api\.Identitizer|sailpoint\.task\.IdentityRefreshExecutor|sailpoint\.object\.LockInfo"), "IDENTITY_PROCESSING",
+            match(logger,"sailpoint\.api\.Aggregator"), "AGGREGATION",
+            match(logger,"sailpoint\.provisioning\.IIQEvaluator|sailpoint\.provisioning\.PlanCompiler|sailpoint\.provisioning\.PlanEvaluator|sailpoint\.api\.Provisioner"), "PROVISIONING",
+            match(logger,"nike\.rule\.ResourceObjectCustomization|ResourceObjectCustomization"), "RULE_SCRIPT",
+            match(logger,"sailpoint\.server\.BSFRuleRunner"), "RULE_SCRIPT",
+            match(logger,"sailpoint\.workflow|sailpoint\.api\.Workflower"), "WORKFLOW",
+            match(logger,"sailpoint\.api\.Certificationer|sailpoint\.api\.CertificationPhaser"), "CERTIFICATION",
+            match(logger,"openconnector\.|sailpoint\.connector\."), "CONNECTOR",
+            match(logger,"nike\.integration"), "NIKE_INTEGRATION",
+            match(message,"(?i)failed to lazily initialize|could not initialize proxy|already associated with the session|GenericJDBCException"), "IIQ_PERSISTENCE",
+            match(message,"(?i)Provisioning error [0-9]+ for"), "LIFECYCLE_EVENT",
+            match(logger,"^rule\.|^Nike\.|^com\.nike"), "RULE_SCRIPT",
+            true(), "OTHER")
+        | eval error_family=case(
+            match(message,"(?i)The application script threw an exception.*NullPointerException"), "RULE_NULL_POINTER",
+            match(message,"(?i)The application script threw an exception|BeanShell script error|BSFException"), "RULE_SCRIPT_FAILURE",
+            match(message,"(?i)failed to lazily initialize a collection.*Identity\.links"), "HIBERNATE_LAZY_INIT_LINKS",
+            match(message,"(?i)failed to lazily initialize a collection"), "HIBERNATE_LAZY_INIT",
+            match(message,"(?i)could not initialize proxy - no Session"), "HIBERNATE_NO_SESSION",
+            match(message,"(?i)Session/EntityManager is closed"), "HIBERNATE_SESSION_CLOSED",
+            match(message,"(?i)already associated with the session.*sailpoint\.object\.Link"), "HIBERNATE_DUPLICATE_LINK",
+            match(message,"(?i)already associated with the session"), "HIBERNATE_DUPLICATE_SESSION",
+            match(message,"(?i)Certification phase transitioning failed"), "CERT_PHASE_TRANSITION_FAILED",
+            match(message,"(?i)GenericJDBCException.*could not execute statement"), "HIBERNATE_JDBC_EXECUTE",
+            match(message,"(?i)err_workflow_events_failed|Workflow event processing failed"), "MAINT_WORKFLOW_EVENTS",
+            match(message,"(?i)err_cert_auto_close_failed|Automatic certification closing failed"), "CERT_AUTO_CLOSE_FAILED",
+            match(message,"(?i)err_lcm_scan_failed|error scanning Identity Requests"), "IRM_LCM_SCAN_FAILED",
+            match(message,"(?i)task_msg_error_identity_refresh_threshold_exceeded|Threshold has been exceeded"), "REFRESH_THRESHOLD_EXCEEDED",
+            match(message,"(?i)Maximum refresh exceptions"), "REFRESH_MAX_EXCEPTIONS",
+            match(message,"(?i)Decache and try again"), "REFRESH_DECACHE",
+            match(message,"(?i)Unable to release lock"), "TASK_LOCK_RELEASE",
+            match(message,"(?i)Unable to locate manager account"), "MANAGER_ACCOUNT_MISSING",
+            match(message,"(?i)Exception during aggregation"), "AGGREGATION_EXCEPTION",
+            match(message,"(?i)Canceling delete detection due to aggregation errors"), "AGGREGATION_DELETE_DETECT",
+            match(message,"(?i)Provisioning failure:"), "PROVISIONING_SUMMARY",
+            match(message,"(?i)Provisioning error [0-9]+ for"), "LIFECYCLE_PROVISIONING_ERROR",
+            match(message,"(?i)Joiner Failures|Leaver Failures|Rehire Failures"), "LIFECYCLE_BATCH_SUMMARY",
+            match(message,"(?i)Unable to update shared TaskResult|Unable to create new TaskResult|TaskResultExistsException"), "TASKRESULT_FAILURE",
+            match(message,"(?i)already running"), "TASK_ALREADY_RUNNING",
+            match(message,"(?i)Error in .* step:"), "WORKFLOW_STEP_FAILURE",
+            match(logger,"(?i)joiner\.|leaver\.|rehire\.|\.wf\.step"), "LIFECYCLE_WORKFLOW_STEP",
+            match(message,"(?i)An unexpected error occurred.*GeneralException"), "GENERAL_EXCEPTION",
+            match(message,"(?i)RequestPermanentException"), "REQUEST_PERMANENT",
+            match(message,"(?i)RequestTemporaryException"), "REQUEST_TEMPORARY",
+            match(message,"(?i)err_workflow_errors|Workflow completed with errors"), "WORKFLOW_COMPLETED_ERRORS",
+            match(message,"(?i)Improper AccountSelection"), "ACCOUNT_SELECTION_INVALID",
+            match(logger,"sailpoint\.api\.FullTextifier") AND match(message,"(?i)Undeclared field"), "FULLTEXT_INDEX_UNDECLARED_FIELD",
+            match(message,"(?i)Undeclared field: application\.extended1"), "UNDECLARED_FIELD_EXTENDED1",
+            match(message,"(?i)Cannot find TaskDefinition for TaskSchedule"), "TASK_DEFINITION_MISSING",
+            match(message,"(?i)Beeline Status TrackingJSONArray"), "BEELINE_JSON_ARRAY",
+            match(message,"(?i)ResourceObjectCustomization AD privileged rule.*StringIndexOutOfBoundsException"), "AD_PRIV_RULE_STRING_INDEX",
+            match(message,"(?i)Refresh lock expired for Identity"), "REFRESH_LOCK_EXPIRED",
+            match(message,"(?i)Aggregation lock expired for Identity"), "AGGREGATION_LOCK_EXPIRED",
+            match(message,"(?i)reached end of Refresh without lock"), "REFRESH_WITHOUT_LOCK",
+            match(message,"(?i)Incorrect integer value.*IfRetail"), "JDBC_IFRETAIL_TYPE_MISMATCH",
+            match(message,"(?i)CSRF validation failed"), "CSRF_VALIDATION",
+            match(message,"(?i)Could not parse request"), "SCIM_PARSE_REQUEST",
+            match(message,"(?i)No first name w"), "SCIM_MISSING_FIRSTNAME",
+            match(message,"(?i)Step call threw an exception"), "WORKFLOW_STEP_EXCEPTION",
+            match(message,"(?i)Incremental ResourceObject without matching Link"), "AGGREGATION_ORPHAN_RO",
+            match(message,"(?i)objectJson is null or empty"), "INTEGRATION_NULL_JSON",
+            match(message,"(?i)Set status retry: for all attributes"), "CONNECTOR_RETRY_ALL_ATTRS",
+            match(message,"(?i)validationErrorValidation error occurred|SOAP-ENV:Client\.validationError"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)Exception occurred while performing.*validationError|Change_Job_Request|Headcount_Option|Proposed_Position"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)scimType.:uniqueness|already in use|already exists in our database|LoginId must be unique|HTTP/1.1 409"), "SCIM_UNIQUENESS",
+            match(message,"(?i)Username already taken|Email has already been taken|That externalId or email address is already in use"), "SCIM_UNIQUENESS",
+            match(message,"(?i)Could not parse request"), "SCIM_PARSE_REQUEST",
+            match(message,"(?i)No first name was provided|Country field is either null"), "SCIM_VALIDATION",
+            match(message,"(?i)Exception occurred while performing"), "PROVISIONING_OPERATION_EXCEPTION",
+            match(message,"(?i)error in ResourceObjectCustomization AD privileged|ResourceObjectCustomization AD privileged"), "AD_PRIV_RULE_STRING_INDEX",
+            match(message,"(?i)Identity has AD Link but no CRP"), "DATA_CORRELATION_GAP",
+            match(message,"(?i)Unresolved field dependency"), "RULE_FIELD_DEPENDENCY",
+            match(message,"(?i)Connector could not find account"), "CONNECTOR_ACCOUNT_NOT_FOUND",
+            match(message,"(?i)Owner Workgroup not present"), "WORKGROUP_NOT_FOUND",
+            match(message,"(?i)validationErrorValidation error occurred"), "SOAP_VALIDATION_WORKDAY",
+            match(message,"(?i)[0-9]+ Error\(s\) reported back from the IQService.*connecting to group"), "AD_GROUP_NOT_FOUND",
+            match(message,"(?i)[0-9]+ Error\(s\) reported back from the IQService.*Failed to update attributes"), "AD_IDENTITY_UPDATE_NOT_FOUND",
+            match(exception_class,"NullPointerException"), "NULL_POINTER",
+            match(exception_class,"ClassCastException"), "RULE_TYPE_MISMATCH",
+            match(exception_class,"IllegalAccessException"), "JAVA_MODULE_ACCESS",
+            match(exception_class,"JSONException"), "RULE_JSON_PARSE",
+            match(exception_class,"ConnectorException"), "CONNECTOR_EXCEPTION",
+            match(exception_class,"GeneralException"), "GENERAL_EXCEPTION",
+            true(), "OTHER")
+        | eval failure_domain=if(
+            match(message,"(?i)Unable to locate manager account|Decache and try again|Unable to release lock|reached end of Refresh without lock|Refresh lock expired|Aggregation lock expired|Maximum refresh exceptions|Threshold has been exceeded|Error encountered while trying to refresh partition|PHASE_PROCESS_EVENTS"),
+            "IDENTITY_PROCESSING", failure_domain)
+        | eval error_category=case(
+            match(error_family,"RULE_|BSF_|NULL_POINTER|JAVA_MODULE"), "RULE_SCRIPT",
+            match(error_family,"HIBERNATE_LAZY|HIBERNATE_NO_SESSION|HIBERNATE_SESSION_CLOSED"), "SESSION_CLOSED",
+            match(error_family,"HIBERNATE_DUPLICATE"), "SESSION_CONFLICT",
+            match(error_family,"HIBERNATE_JDBC|CERT_PHASE"), "DATABASE",
+            match(error_family,"CERT_"), "CERTIFICATION",
+            match(error_family,"REFRESH_LOCK|REFRESH_WITHOUT|AGGREGATION_LOCK|TASK_LOCK_RELEASE|REFRESH_DECACHE|REFRESH_MAX|REFRESH_THRESHOLD"), "SYSTEM_LOCK",
+            match(error_family,"MAINT_|IRM_|TASKRESULT|TASK_ALREADY|FULLTEXT_INDEX"), "SYSTEM_TASK",
+            match(error_family,"MANAGER_ACCOUNT"), "MISSING_MANAGER",
+            match(error_family,"AGGREGATION_ORPHAN|AGGREGATION_EXCEPTION|AGGREGATION_DELETE"), "DATA_VALIDATION",
+            match(error_family,"PROVISIONING_SUMMARY"), "PROVISIONING_FAILURE",
+            match(error_family,"LIFECYCLE"), "LIFECYCLE_PROVISIONING",
+            match(error_family,"WORKFLOW"), "WORKFLOW_FAILURE",
+            match(error_family,"CONNECTOR_EXCEPTION|GENERAL_EXCEPTION"), "IIQ_PLATFORM",
+            match(error_family,"ACCOUNT_SELECTION|UNDECLARED_FIELD|SCIM_MISSING|JDBC_IFRETAIL|AGGREGATION_ORPHAN|INTEGRATION_NULL"), "DATA_VALIDATION",
+            match(error_family,"SOAP_VALIDATION"), "INTEGRATION_VALIDATION",
+            match(error_family,"CONNECTOR_RETRY"), "RETRY",
+            match(error_family,"TASK_DEFINITION"), "CONFIGURATION",
+            match(error_family,"BEELINE_JSON|SCIM_PARSE"), "INTEGRATION",
+            match(error_family,"CSRF"), "AUTHENTICATION",
+            match(error_family,"AD_GROUP|AD_IDENTITY"), "OBJECT_NOT_FOUND",
+            true(), "OTHER")
+        | rex field=message "Provisioning failure: (?<identity_name>[^\s]+) on (?<target_application>.+)$"
+        | join type=left thread [
+            search index=app-gold sourcetype="log4j:IIQ" earliest=$time_range.earliest$ latest=$time_range.latest$ logger="sailpoint.api.Aggregator" ("Beginning account scan" OR "Beginning group scan" OR "Refreshing")
+            | rex field=_raw "^(?<log_ts>[0-9]{4}-[0-9]{2}-[0-9]{2}\s+\S+)\s+~\s+(?<log_level>\w+)\s+~\s+(?<thread>[^~]+)\s+~\s+(?<logger>[^:]+):(?<line>[0-9]+)\s+-\s+(?<message>.+)$"
+            | rex field=message "Beginning account scan on application: (?<agg_app>.+)$"
+            | rex field=message "Beginning group scan on application: (?<agg_app>.+)$"
+            | rex field=message "Refreshing [^ ]+ from (?<agg_app>.+)$"
+            | eval agg_app=trim(coalesce(agg_app, ""))
+            | where len(agg_app)>0
+            | stats latest(agg_app) as agg_app by thread
+        ]
+        | eval target_application=coalesce(nullif(target_application,""), agg_app, "Unknown")
+        | eval target_application=if(match(logger,"sailpoint\.api\.Identitizer|sailpoint\.task\.IdentityRefreshExecutor|sailpoint\.object\.LockInfo"), "Identity Refresh", target_application)
+        | eval target_application=if(match(logger,"sailpoint\.api\.FullTextifier"), "Full Text Index", target_application)
+        | eval target_application=if(match(logger,"sailpoint\.provisioning\.IIQEvaluator") AND match(error_family,"ACCOUNT_SELECTION|UNDECLARED_FIELD"), "IIQ Identity Cube", target_application)
+        | eval error_template=trim(message)
+        | rex field=error_template mode=sed "s/Incremental ResourceObject without matching Link: [0-9]+/Incremental ResourceObject without matching Link: {link_id}/g"
+        | rex field=error_template mode=sed "s/Provisioning failure: [^ ]+ on/Provisioning failure: {identity} on/g"
+        | rex field=error_template mode=sed "s/[^ ]*@[^ ]*/{email}/g"
+        | rex field=error_template mode=sed "s/[0-9][0-9][0-9][0-9]+/{id}/g"
+        | rex field=error_template mode=sed "s/Refresh lock expired for Identity: [^ ]+/Refresh lock expired for Identity: {identity}/g"
+        | rex field=error_template mode=sed "s/Aggregation lock expired for Identity: [^ ]+/Aggregation lock expired for Identity: {identity}/g"
+        | rex field=error_template mode=sed "s/reached end of Refresh without lock: [^ ]+/reached end of Refresh without lock: {identity}/g"
+        | eval error_template=case(
+            error_family="RULE_NULL_POINTER", "Application rule script failure: NullPointerException (BeanShell)",
+            error_family="RULE_SCRIPT_FAILURE", "Application rule script failure (BeanShell)",
+            error_family="HIBERNATE_LAZY_INIT_LINKS", "Hibernate: Identity.links lazy init failed (no Session)",
+            error_family="HIBERNATE_LAZY_INIT", "Hibernate: lazy collection init failed (no Session)",
+            error_family="HIBERNATE_NO_SESSION", "Hibernate: could not initialize proxy (no Session)",
+            error_family="HIBERNATE_DUPLICATE_LINK", "Hibernate: duplicate Link object in session",
+            error_family="CERT_PHASE_TRANSITION_FAILED", "Certification phase transition failed (database/persistence)",
+            error_family="MAINT_WORKFLOW_EVENTS", "Housekeeper: workflow event processing failed",
+            error_family="FULLTEXT_INDEX_UNDECLARED_FIELD", "Full Text Index: Undeclared field application.extended1",
+            error_family="REFRESH_DECACHE", "Identity Refresh: Decache and try again",
+            error_family="TASK_LOCK_RELEASE", "Unable to release lock",
+            error_family="REFRESH_WITHOUT_LOCK", "Identity reached end of Refresh without lock: {identity}",
+            error_family="REFRESH_LOCK_EXPIRED", "Refresh lock expired for Identity: {identity}",
+            error_family="AGGREGATION_LOCK_EXPIRED", "Aggregation lock expired for Identity: {identity}",
+            error_family="REFRESH_MAX_EXCEPTIONS", "Maximum refresh exceptions exceeded",
+            error_family="REFRESH_THRESHOLD_EXCEEDED", "Identity Refresh threshold exceeded",
+            error_family="MANAGER_ACCOUNT_MISSING", "Unable to locate manager account with identity: {email}",
+            error_family="ACCOUNT_SELECTION_INVALID", "Improper AccountSelection identity encountered",
+            error_family="SOAP_VALIDATION_WORKDAY", "Workday SOAP validation error",
+            error_family="AD_GROUP_NOT_FOUND", "IQService: AD group not found (NO_OBJECT)",
+            error_family="AD_IDENTITY_UPDATE_NOT_FOUND", "IQService: AD identity attribute update failed (NO_OBJECT)",
+            error_family="AGGREGATION_ORPHAN_RO", "Incremental ResourceObject without matching Link: {link_id}",
+            error_family="PROVISIONING_SUMMARY", "Provisioning failure: {identity} on {application}",
+            error_family="GENERAL_EXCEPTION", "IIQ GeneralException (inspect nested cause)",
+            true(), error_template)
+| search failure_domain="$selected_domain$"
+| eval target_application=trim(coalesce(target_application, ""))
+| where error_family="$selected_family$" AND logger="$selected_logger$" AND error_template="$selected_template$"
+| where if("$selected_app$"="Unknown", true(), target_application="$selected_app$")
+| sort 0 - _time
+| head 100
+| table _time target_application identity_name logger line thread exception_class message _raw
+| rename _time AS "Time", target_application AS "Application", identity_name AS "Identity", logger AS "Logger", line AS "Line", thread AS "Thread", exception_class AS "Exception", message AS "Message", _raw AS "Raw Log Line"
+
+          ]]>
+          </query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="count">100</option>
+      </table>
+    </panel>
+  </row>
+</form>
